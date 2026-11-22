@@ -1,22 +1,21 @@
 import { env, SELF } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isValidSigningCertUrl } from '../../src/sns/verify';
-import cert from '../fixtures/sns-test-cert.pem?raw';
-import key from '../fixtures/sns-test-key.pkcs8.pem?raw';
 import { api, createTenant } from '../helpers';
+import { makeTestSigner } from './test-cert';
+
+const signer = await makeTestSigner();
+const cert = signer.certPem;
 
 const CERT_URL = 'https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-test.pem';
 
 async function sign(fields: Record<string, string>): Promise<string> {
-  const der = Uint8Array.from(atob(key.replace(/-----[^-]+-----|\s/g, '')), (c) => c.charCodeAt(0));
-  const k = await crypto.subtle.importKey('pkcs8', der, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
   const order =
     fields.Type === 'Notification'
       ? ['Message', 'MessageId', 'Subject', 'Timestamp', 'TopicArn', 'Type']
       : ['Message', 'MessageId', 'SubscribeURL', 'Timestamp', 'Token', 'TopicArn', 'Type'];
   const toSign = order.filter((f) => fields[f] !== undefined).map((f) => `${f}\n${fields[f]}\n`).join('');
-  const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', k, new TextEncoder().encode(toSign));
-  return btoa(String.fromCharCode(...new Uint8Array(sig)));
+  return signer.sign(toSign);
 }
 
 async function snsPost(tenantId: string, fields: Record<string, string>, tamper = false) {
