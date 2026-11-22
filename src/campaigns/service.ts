@@ -290,3 +290,30 @@ export async function setCampaignStatus(
   await d.update(campaigns).set({ status: 'sending', pauseReason: null }).where(eq(campaigns.id, campaignId));
   return { ok: true, status: 'sending' };
 }
+
+/**
+ * Owner action (eng review D9): send again to recipients whose delivery is unknown (a crash after
+ * the SES call). The owner accepts that some of them may get it twice. Re-opens the dispatch so the
+ * reconciler publishes them.
+ */
+export async function resendUnknowns(d: Db, tenantId: string, campaignId: string): Promise<{ ok: boolean; requeued: number }> {
+  const c = await d
+    .select({ id: campaigns.id, status: campaigns.status })
+    .from(campaigns)
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.tenantId, tenantId)))
+    .get();
+  if (!c || c.status === 'cancelled') return { ok: false, requeued: 0 };
+  const res = await d.$client
+    .prepare(`update campaign_recipients set status = 'pending', claimed_at = null, claim_batch = null where campaign_id = ?1 and status = 'unknown'`)
+    .bind(campaignId)
+    .run();
+  if (res.meta.changes > 0) {
+    await d.$client.batch([
+      d.$client.prepare(`update campaigns set status = 'sending' where id = ?1 and status in ('sent', 'approved', 'sending')`).bind(campaignId),
+      d.$client
+        .prepare(`insert into dispatches (campaign_id, cursor, lease_until, done) values (?1, '', null, 0) on conflict (campaign_id) do update set cursor = '', lease_until = null, done = 0`)
+        .bind(campaignId),
+    ]);
+  }
+  return { ok: true, requeued: res.meta.changes };
+}

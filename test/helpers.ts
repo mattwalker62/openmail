@@ -30,3 +30,42 @@ export function api(apiKey: string, path: string, init: RequestInit = {}): Promi
     headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json', ...init.headers },
   });
 }
+
+let owners = 0;
+
+/** Invite, sign up and return a session cookie for an owner of `slug`. */
+export async function signInOwner(slug: string): Promise<{ cookie: string; email: string }> {
+  owners += 1;
+  const email = `owner${owners}-${crypto.randomUUID().slice(0, 6)}@example.com`;
+  const inv = await SELF.fetch(`https://openmail.test/admin/tenants/${slug}/owners`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  const { inviteUrl } = (await inv.json()) as { inviteUrl: string };
+  const invite = new URL(inviteUrl).searchParams.get('invite')!;
+  const res = await SELF.fetch('https://openmail.test/signup', {
+    method: 'POST',
+    // A distinct client per owner, so the per-IP sign-up limit doesn't trip across tests.
+    headers: { 'content-type': 'application/x-www-form-urlencoded', 'cf-connecting-ip': `10.0.0.${owners}` },
+    body: new URLSearchParams({ name: 'Owner', email, password: 'correct horse battery staple', invite }).toString(),
+    redirect: 'manual',
+  });
+  const cookie = res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  if (!cookie) throw new Error(`sign-up failed: ${res.status}`);
+  return { cookie, email };
+}
+
+export function asOwner(cookie: string, path: string, init: RequestInit = {}): Promise<Response> {
+  return SELF.fetch(`https://openmail.test${path}`, {
+    redirect: 'manual',
+    ...init,
+    headers: { cookie, origin: 'https://openmail.test', ...init.headers },
+  });
+}
+
+export const formBody = (fields: Record<string, string>) => ({
+  method: 'POST',
+  headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  body: new URLSearchParams(fields).toString(),
+});
