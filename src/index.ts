@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { admin } from './routes/admin';
 import { v1 } from './routes/v1';
+import { sesEvents } from './routes/ses-events';
+import { unsubscribe } from './routes/unsubscribe';
 import { processPage } from './campaigns/consumer';
 import { reconcile, type PageMessage } from './campaigns/reconciler';
 import { deliveryDeps } from './campaigns/runtime';
@@ -17,6 +19,8 @@ app.get('/health', async (c) => {
 
 app.route('/admin', admin);
 app.route('/v1', v1);
+app.route('/ses', sesEvents);
+app.route('/u', unsubscribe);
 
 app.notFound((c) => c.json({ error: 'not_found' }, 404));
 

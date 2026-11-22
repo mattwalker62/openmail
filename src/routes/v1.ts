@@ -54,9 +54,14 @@ v1.post('/contacts', async (c) => {
     externalId?: string;
     source?: string;
     lists?: string[];
+    /** Migration only: keep an old stack's unsubscribe token so links already in inboxes still work. */
+    unsubscribeToken?: string;
   };
   const email = normalizeEmail(b.email ?? '');
   if (!isValidEmail(email)) return c.json({ error: 'invalid_email' }, 400);
+  if (b.unsubscribeToken !== undefined && !/^[A-Za-z0-9_-]{16,128}$/.test(b.unsubscribeToken)) {
+    return c.json({ error: 'invalid_unsubscribe_token' }, 400);
+  }
   const tenantId = c.get('tenantId');
   const d = db(c.env.DB);
 
@@ -75,7 +80,7 @@ v1.post('/contacts', async (c) => {
       name: b.name ?? null,
       externalId: b.externalId ?? null,
       source: b.source ?? null,
-      unsubscribeToken: randomToken(24),
+      unsubscribeToken: b.unsubscribeToken ?? randomToken(24),
     });
   }
 

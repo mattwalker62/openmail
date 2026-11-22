@@ -21,6 +21,8 @@ export const tenants = sqliteTable('tenants', {
   bulkConfigurationSet: text('bulk_configuration_set').notNull(),
   bulkPerSecond: integer('bulk_per_second').notNull().default(14),
   context: text('context').notNull().default(''),
+  /** JSON array of SNS topic ARNs this tenant's SES events may arrive from (fail-closed allowlist). */
+  snsTopicArns: text('sns_topic_arns').notNull().default('[]'),
   createdAt: createdAt(),
 });
 
@@ -258,5 +260,14 @@ export const transactionalMessages = sqliteTable('transactional_messages', {
   status: text('status', { enum: ['sent', 'failed', 'suppressed'] }).notNull(),
   messageId: text('message_id'),
   error: text('error'),
+  createdAt: createdAt(),
+});
+
+/** SNS posts refused at /ses/:tenantId (bad signature, unknown topic), kept for investigation. */
+export const webhookQuarantine = sqliteTable('webhook_quarantine', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id'),
+  reason: text('reason').notNull(),
+  body: text('body').notNull(),
   createdAt: createdAt(),
 });

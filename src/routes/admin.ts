@@ -81,3 +81,15 @@ admin.put('/tenants/:slug/templates/:name', async (c) => {
     .onConflictDoUpdate({ target: [templates.tenantId, templates.name], set: values });
   return c.json({ ok: true });
 });
+
+/** Set the SNS topics this tenant's SES events may arrive from (fail-closed allowlist). */
+admin.put('/tenants/:slug/sns-topics', async (c) => {
+  const b = (await c.req.json().catch(() => null)) as { topicArns?: string[] } | null;
+  const arns = b?.topicArns ?? [];
+  if (!arns.every((a) => /^arn:aws(-[a-z]+)?:sns:[a-z0-9-]+:\d{12}:[A-Za-z0-9_-]{1,256}$/.test(a))) {
+    return c.json({ error: 'invalid_topic_arn' }, 400);
+  }
+  const d = db(c.env.DB);
+  const updated = await d.update(tenants).set({ snsTopicArns: JSON.stringify(arns) }).where(eq(tenants.slug, c.req.param('slug'))).returning({ id: tenants.id });
+  return updated.length ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404);
+});
