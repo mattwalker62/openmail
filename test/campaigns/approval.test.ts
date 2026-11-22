@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { approveCampaign, createDraft, createPolicy, requestCampaign, updateDraft } from '../../src/campaigns/service';
+import { approveCampaign, createDraft, createPolicy, requestCampaign, setCampaignStatus, updateDraft } from '../../src/campaigns/service';
 import { db } from '../../src/db/client';
 import { api, createTenant } from '../helpers';
 
@@ -67,6 +67,21 @@ describe('human approval of a send intent', () => {
   });
 });
 
+describe('erasure reaches campaign snapshots', () => {
+  it('removes an erased contact from every campaign snapshot, so no copy of the address remains', async () => {
+    const t = await tenantWithList(['keep@x.com', 'gone@x.com']);
+    const draft = await createDraft(t.d, t.id, { subject: 's', html: 'h' }, 'api');
+    const req = await requestCampaign(t.d, { tenantId: t.id, keyId: t.keyId, origin: 'api' }, { draftId: draft.id, list: 'beacon' });
+    await approveCampaign(t.d, req.campaignId, 'owner-1');
+
+    await api(t.apiKey, '/v1/contacts/erase', { method: 'POST', body: JSON.stringify({ email: 'gone@x.com' }) });
+
+    expect(await recipients(req.campaignId)).toEqual([{ email: 'keep@x.com', status: 'pending' }]);
+    const anywhere = await env.DB.prepare("select count(*) as n from campaign_recipients where email = 'gone@x.com'").first<{ n: number }>();
+    expect(anywhere?.n).toBe(0);
+  });
+});
+
 describe('standing approval policies', () => {
   async function withPolicy(emails: string[]) {
     const t = await tenantWithList(emails);
@@ -126,5 +141,15 @@ describe('standing approval policies', () => {
     expect((await send({ origin: 'mcp' })).status).toBe('needs_approval');
     expect((await send()).status).toBe('approved'); // second of max 2 today
     expect((await send()).status).toBe('needs_approval'); // over the cap
+  });
+
+  it('counts a cancelled policy send toward the daily cap, so cancelling cannot buy another unattended send', async () => {
+    const { t, send } = await withPolicy(['a@x.com']);
+    await approveCampaign(t.d, (await send()).campaignId, 'owner-1');
+    const second = await send();
+    expect(second.status).toBe('approved');
+    await setCampaignStatus(t.d, t.id, second.campaignId, 'cancel');
+
+    expect((await send()).status).toBe('needs_approval');
   });
 });

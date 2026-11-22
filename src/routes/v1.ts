@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { createKeyAuthenticator } from '../auth/api-keys';
 import { createDraft, requestCampaign, setCampaignStatus, updateDraft } from '../campaigns/service';
 import { db } from '../db/client';
-import { apiKeys, campaigns, contacts, listMembers, lists, suppressions } from '../db/schema';
+import { apiKeys, campaignRecipients, campaigns, contacts, listMembers, lists, suppressions } from '../db/schema';
 import type { Env } from '../env';
 import { addressHash, isValidEmail, normalizeEmail, randomToken } from '../lib/address';
 
@@ -79,8 +79,9 @@ v1.post('/contacts', async (c) => {
 });
 
 /**
- * Erase a contact for this tenant. The hashed suppression goes in first, in the same atomic batch,
- * so the address can never be mailed again even though no plain copy is kept. Idempotent.
+ * Erase a contact for this tenant: the contact, its list memberships and every campaign snapshot row.
+ * The hashed suppression goes in first, in the same atomic batch, so the address can never be mailed
+ * again even though no plain copy is kept. Idempotent.
  */
 v1.post('/contacts/erase', async (c) => {
   const b = (await c.req.json().catch(() => ({}))) as { email?: string };
@@ -96,6 +97,8 @@ v1.post('/contacts/erase', async (c) => {
 
   await d.batch([
     d.insert(suppressions).values({ tenantId, addressHash: hash, kind: 'erased' }).onConflictDoNothing(),
+    // Campaign snapshots hold a copy of the address and delivery history: erase them too.
+    d.delete(campaignRecipients).where(inArray(campaignRecipients.contactId, ids)),
     d.delete(listMembers).where(inArray(listMembers.contactId, ids)),
     d.delete(contacts).where(and(eq(contacts.tenantId, tenantId), eq(contacts.email, email))),
   ]);

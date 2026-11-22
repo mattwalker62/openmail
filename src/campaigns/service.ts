@@ -168,13 +168,9 @@ export async function requestCampaign(
   const sentToday = await d
     .select({ id: campaigns.id })
     .from(campaigns)
-    .where(
-      and(
-        eq(campaigns.policyId, policy.id),
-        inArray(campaigns.status, ['approved', 'sending', 'sent']),
-        gte(campaigns.approvedAt, new Date(now - 24 * HOUR)),
-      ),
-    )
+    // Every approval under the policy counts, whatever happened to it since: cancelling a send
+    // must not free up another unattended one.
+    .where(and(eq(campaigns.policyId, policy.id), gte(campaigns.approvedAt, new Date(now - 24 * HOUR))))
     .all();
   if (sentToday.length >= policy.maxPerDay) return { campaignId, status: 'needs_approval' };
 
