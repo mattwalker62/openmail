@@ -17,6 +17,8 @@
       { "queue": "openmail-send-dlq", "max_batch_size": 10 }
     ]
   },
+  "ratelimits": [{ "name": "AUTH_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "7fb05fcba4b743a6bca47824beafefc5" }],
   "d1_databases": [
     {
       "binding": "DB",
