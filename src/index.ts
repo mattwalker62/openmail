@@ -2,6 +2,10 @@ import { Hono } from 'hono';
 import type { Env } from './env';
 import { admin } from './routes/admin';
 import { v1 } from './routes/v1';
+import { processPage } from './campaigns/consumer';
+import { reconcile, type PageMessage } from './campaigns/reconciler';
+import { deliveryDeps } from './campaigns/runtime';
+import { db } from './db/client';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -18,4 +22,26 @@ app.notFound((c) => c.json({ error: 'not_found' }, 404));
 
 export { SendRateLimiter } from './rate-limit/send-rate-limiter';
 
-export default app;
+export default {
+  fetch: app.fetch,
+
+  /** Every minute: publish due campaign pages from the dispatch outbox (eng review D10). */
+  async scheduled(_controller, env, ctx) {
+    ctx.waitUntil(reconcile(db(env.DB), async (msg) => void (await env.SEND_QUEUE.send(msg)), Date.now()));
+  },
+
+  async queue(batch, env) {
+    if (batch.queue.endsWith('-dlq')) {
+      // Pages that failed every retry. Their recipients are still pending, so the reconciler
+      // re-publishes them after its lease; log so the owner can see a lane that keeps failing.
+      for (const m of batch.messages) console.error('dead-lettered page', JSON.stringify(m.body));
+      batch.ackAll();
+      return;
+    }
+    const deps = deliveryDeps(env);
+    for (const m of batch.messages) {
+      await processPage(db(env.DB), deps, m.body, Date.now());
+      m.ack();
+    }
+  },
+} satisfies ExportedHandler<Env, PageMessage>;
