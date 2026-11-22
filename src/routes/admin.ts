@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { db } from '../db/client';
 import { apiKeys, memberships, ownerInvites, templates, tenants, users } from '../db/schema';
-import { normalizeEmail, isValidEmail } from '../lib/address';
+import { normalizeEmail, isValidEmail, randomToken } from '../lib/address';
 import { eq } from 'drizzle-orm';
 import type { Env } from '../env';
 import { generateApiKey, hashApiKey } from '../auth/api-keys';
@@ -106,8 +106,14 @@ admin.post('/tenants/:slug/owners', async (c) => {
   const user = await d.select({ id: users.id }).from(users).where(eq(users.email, email)).get();
   if (user) {
     await d.insert(memberships).values({ tenantId: tenant.id, userId: user.id, role: 'owner' }).onConflictDoNothing();
-  } else {
-    await d.insert(ownerInvites).values({ tenantId: tenant.id, email }).onConflictDoNothing();
+    return c.json({ ok: true, inviteUrl: null }, 201);
   }
-  return c.json({ ok: true, invited: !user }, 201);
+  // A single-use token: whoever holds the link can create this one account. Shown once; only its hash is kept.
+  const token = randomToken(32);
+  const tokenHash = await sha256Hex(token);
+  await d
+    .insert(ownerInvites)
+    .values({ tenantId: tenant.id, email, tokenHash })
+    .onConflictDoUpdate({ target: [ownerInvites.tenantId, ownerInvites.email], set: { tokenHash } });
+  return c.json({ ok: true, inviteUrl: `${c.env.PUBLIC_BASE_URL}/signup?invite=${token}` }, 201);
 });

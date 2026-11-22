@@ -9,13 +9,15 @@ const form = (fields: Record<string, string>) => ({
   redirect: 'manual' as const,
 });
 
-async function invite(slug: string, email: string) {
+async function invite(slug: string, email: string): Promise<string> {
   const res = await SELF.fetch(`https://openmail.test/admin/tenants/${slug}/owners`, {
     method: 'POST',
     headers: { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' },
     body: JSON.stringify({ email }),
   });
   expect(res.status).toBe(201);
+  const { inviteUrl } = (await res.json()) as { inviteUrl: string };
+  return new URL(inviteUrl).searchParams.get('invite')!;
 }
 
 describe('owner accounts', () => {
@@ -26,11 +28,29 @@ describe('owner accounts', () => {
     expect(n?.n).toBe(0);
   });
 
-  it('lets an invited owner sign up, makes them owner of the tenant, and signs them in', async () => {
+  it("refuses sign-up for an invited email without that invite's token, so knowing the email is not enough", async () => {
     const t = await createTenant();
-    await invite(t.slug, 'Owner@Example.com');
+    await invite(t.slug, 'target@example.com');
 
-    const res = await SELF.fetch('https://openmail.test/signup', form({ name: 'Owner', email: 'owner@example.com', password: 'correct horse battery 2' }));
+    const noToken = await SELF.fetch('https://openmail.test/signup', form({ name: 'X', email: 'target@example.com', password: 'correct horse battery 3' }));
+    expect(noToken.status).toBe(403);
+    const wrong = await SELF.fetch('https://openmail.test/signup', form({ name: 'X', email: 'target@example.com', password: 'correct horse battery 3', invite: 'not-the-token-0123456789' }));
+    expect(wrong.status).toBe(403);
+    const direct = await SELF.fetch('https://openmail.test/api/auth/sign-up/email', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://openmail.test' },
+      body: JSON.stringify({ name: 'X', email: 'target@example.com', password: 'correct horse battery 3' }),
+    });
+    expect(direct.status).toBeGreaterThanOrEqual(400);
+    const n = await env.DB.prepare("select count(*) as n from user where email = 'target@example.com'").first<{ n: number }>();
+    expect(n?.n).toBe(0);
+  });
+
+  it('lets an invited owner sign up with the invite token, makes them owner of the tenant, and signs them in', async () => {
+    const t = await createTenant();
+    const token = await invite(t.slug, 'Owner@Example.com');
+
+    const res = await SELF.fetch('https://openmail.test/signup', form({ name: 'Owner', email: 'owner@example.com', password: 'correct horse battery 2', invite: token }));
     expect(res.status).toBe(303);
     expect(res.headers.get('set-cookie')).toMatch(/session_token=/);
 
@@ -38,6 +58,29 @@ describe('owner accounts', () => {
       "select m.role from memberships m join user u on u.id = m.user_id where u.email = 'owner@example.com' and m.tenant_id = ?",
     ).bind(t.id).first<{ role: string }>();
     expect(m?.role).toBe('owner');
+  });
+});
+
+describe('sign-in redirects', () => {
+  it.each(['//evil.example/x', '/\\evil.example', '/\t/evil.example', 'https://evil.example/', '/%0d%0a//evil.example'])(
+    'never sends someone off-site after sign-in (next=%s)',
+    async (next) => {
+      const page = await SELF.fetch(`https://openmail.test/login?next=${encodeURIComponent(next)}`);
+      const html = await page.text();
+      const value = /name="next" value="([^"]*)"/.exec(html)?.[1] ?? '';
+      expect(value.startsWith('/') && !value.startsWith('//') && !value.includes('evil.example')).toBe(true);
+    },
+  );
+});
+
+describe('brute-force protection', () => {
+  it('rate-limits repeated sign-in attempts for one email', async () => {
+    const statuses: number[] = [];
+    for (let i = 0; i < 12; i++) {
+      const res = await SELF.fetch('https://openmail.test/login', form({ email: 'victim@example.com', password: `guess-${i}-xxxxxxxx` }));
+      statuses.push(res.status);
+    }
+    expect(statuses).toContain(429);
   });
 });
 

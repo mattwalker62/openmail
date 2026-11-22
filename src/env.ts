@@ -13,6 +13,8 @@ export interface Env {
   BETTER_AUTH_SECRET: string;
   /** OAuth grants and tokens for MCP clients (stored hashed by workers-oauth-provider). */
   OAUTH_KV: KVNamespace;
+  /** Cloudflare rate limiter for /login and /signup, per IP and per email. */
+  AUTH_LIMITER: RateLimit;
   /** Injected by OAuthProvider into the default handler. */
   OAUTH_PROVIDER: OAuthHelpers;
 }

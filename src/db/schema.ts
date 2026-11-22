@@ -347,7 +347,10 @@ export const memberships = sqliteTable(
   (t) => [primaryKey({ columns: [t.tenantId, t.userId] })],
 );
 
-/** Sign-up is closed: an account can only be created for an email an admin invited to a tenant. */
+/**
+ * Sign-up is closed: an account can only be created with a single-use invite token an admin issued
+ * for that email and tenant. Knowing an invited email is not enough. Only the token's hash is kept.
+ */
 export const ownerInvites = sqliteTable(
   'owner_invites',
   {
@@ -355,6 +358,7 @@ export const ownerInvites = sqliteTable(
       .notNull()
       .references(() => tenants.id),
     email: text('email').notNull(),
+    tokenHash: text('token_hash'),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.tenantId, t.email] })],
