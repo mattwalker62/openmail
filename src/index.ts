@@ -11,4 +11,6 @@ app.get('/health', async (c) => {
 
 app.notFound((c) => c.json({ error: 'not_found' }, 404));
 
+export { SendRateLimiter } from './rate-limit/send-rate-limiter';
+
 export default app;
