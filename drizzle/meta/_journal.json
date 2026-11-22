@@ -29,6 +29,27 @@
       "when": 1795357682900,
       "tag": "0003_template_links",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795364762449,
+      "tag": "0004_sns",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795365767957,
+      "tag": "0005_tenant_scoped_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795365768587,
+      "tag": "0006_quarantine_envelope",
+      "breakpoints": true
     }
   ]
 }

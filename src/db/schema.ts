@@ -21,6 +21,8 @@ export const tenants = sqliteTable('tenants', {
   bulkConfigurationSet: text('bulk_configuration_set').notNull(),
   bulkPerSecond: integer('bulk_per_second').notNull().default(14),
   context: text('context').notNull().default(''),
+  /** JSON array of SNS topic ARNs this tenant's SES events may arrive from (fail-closed allowlist). */
+  snsTopicArns: text('sns_topic_arns').notNull().default('[]'),
   createdAt: createdAt(),
 });
 
@@ -59,7 +61,8 @@ export const contacts = sqliteTable(
   },
   (t) => [
     uniqueIndex('contacts_tenant_email_idx').on(t.tenantId, t.email),
-    uniqueIndex('contacts_unsubscribe_token_idx').on(t.unsubscribeToken),
+    // Per tenant: one business's imported token can never collide with or reveal another's.
+    uniqueIndex('contacts_tenant_unsubscribe_token_idx').on(t.tenantId, t.unsubscribeToken),
     index('contacts_tenant_external_idx').on(t.tenantId, t.externalId),
   ],
 );
@@ -258,5 +261,18 @@ export const transactionalMessages = sqliteTable('transactional_messages', {
   status: text('status', { enum: ['sent', 'failed', 'suppressed'] }).notNull(),
   messageId: text('message_id'),
   error: text('error'),
+  createdAt: createdAt(),
+});
+
+/**
+ * SNS posts refused at /ses/:tenantId (bad signature, unknown topic), kept for investigation. Only
+ * the envelope is stored: the body carries recipient addresses that erasure could not reach.
+ */
+export const webhookQuarantine = sqliteTable('webhook_quarantine', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id'),
+  reason: text('reason').notNull(),
+  topicArn: text('topic_arn'),
+  messageId: text('message_id'),
   createdAt: createdAt(),
 });

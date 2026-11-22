@@ -128,7 +128,7 @@ export async function processPage(d: Db, deps: DeliveryDeps, msg: PageMessage, n
         subject: campaign.subject,
         html: campaign.html,
         ...(campaign.text ? { text: campaign.text } : {}),
-        unsubscribeUrl: `${deps.publicBaseUrl}/u/${r.unsubscribe_token}`,
+        unsubscribeUrl: `${deps.publicBaseUrl}/u/${campaign.tenant_id}/${r.unsubscribe_token}`,
         tags: [{ name: 'campaign', value: campaign.id }],
       });
       if (result.ok) {
