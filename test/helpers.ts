@@ -3,7 +3,7 @@ import { SELF } from 'cloudflare:test';
 let n = 0;
 
 /** Create a tenant through the admin endpoint and return its slug and first API key. */
-export async function createTenant(): Promise<{ id: string; slug: string; apiKey: string }> {
+export async function createTenant(opts: { secretPrefix?: string } = {}): Promise<{ id: string; slug: string; apiKey: string }> {
   n += 1;
   const slug = `t${n}-${crypto.randomUUID().slice(0, 8)}`;
   const res = await SELF.fetch('https://openmail.test/admin/tenants', {
@@ -13,7 +13,7 @@ export async function createTenant(): Promise<{ id: string; slug: string; apiKey
       slug,
       name: `Tenant ${n}`,
       fromAddress: `News <news@${slug}.example>`,
-      secretPrefix: `SES_${slug.toUpperCase().replace(/-/g, '_')}`,
+      secretPrefix: opts.secretPrefix ?? `SES_${slug.toUpperCase().replace(/-/g, '_')}`,
       txRegion: 'eu-central-1',
       txConfigurationSet: `${slug}-tx`,
       bulkRegion: 'eu-west-1',

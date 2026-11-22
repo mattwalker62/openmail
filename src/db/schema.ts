@@ -227,3 +227,34 @@ export const dispatches = sqliteTable('dispatches', {
   leaseUntil: integer('lease_until', { mode: 'timestamp_ms' }),
   done: integer('done', { mode: 'boolean' }).notNull().default(false),
 });
+
+/**
+ * Pre-approved transactional templates (login link, password reset). `{{name}}` placeholders are
+ * filled from the request's `data`, HTML-escaped in the html body. Managed only by the owner.
+ */
+export const templates = sqliteTable(
+  'templates',
+  {
+    tenantId: text('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    name: text('name').notNull(),
+    subject: text('subject').notNull(),
+    html: text('html').notNull(),
+    text: text('text'),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.tenantId, t.name] })],
+);
+
+/** One row per transactional send, written after the send so it never delays it. No plain address. */
+export const transactionalMessages = sqliteTable('transactional_messages', {
+  id: text('id').primaryKey(),
+  tenantId: text('tenant_id').notNull(),
+  template: text('template').notNull(),
+  addressHash: text('address_hash').notNull(),
+  status: text('status', { enum: ['sent', 'failed', 'suppressed'] }).notNull(),
+  messageId: text('message_id'),
+  error: text('error'),
+  createdAt: createdAt(),
+});

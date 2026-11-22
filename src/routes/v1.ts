@@ -3,7 +3,14 @@ import { Hono } from 'hono';
 import { createKeyAuthenticator } from '../auth/api-keys';
 import { createDraft, requestCampaign, setCampaignStatus, updateDraft } from '../campaigns/service';
 import { db } from '../db/client';
+<<<<<<< HEAD
 import { apiKeys, campaignRecipients, campaigns, contacts, listMembers, lists, suppressions } from '../db/schema';
+=======
+import { apiKeys, campaigns, contacts, listMembers, lists, suppressions, templates, tenants, transactionalMessages } from '../db/schema';
+import { renderTemplate, sendTransactional } from '../transactional/send';
+import { resolveLane } from '../transport/lanes';
+import { sendViaSes } from '../transport/ses';
+>>>>>>> 5d7ab03 (Transactional mail: owner templates on the transactional lane, fail-open suppression)
 import type { Env } from '../env';
 import { addressHash, isValidEmail, normalizeEmail, randomToken } from '../lib/address';
 
@@ -194,3 +201,61 @@ for (const action of ['pause', 'resume', 'cancel'] as const) {
     return c.json(result, result.ok ? 200 : 409);
   });
 }
+
+// ── Transactional mail (login links, password resets) ────────────────────────
+
+v1.post('/messages', async (c) => {
+  const b = (await c.req.json().catch(() => ({}))) as { to?: string; template?: string; data?: Record<string, string> };
+  const to = normalizeEmail(b.to ?? '');
+  if (!isValidEmail(to)) return c.json({ error: 'invalid_email' }, 400);
+  const tenantId = c.get('tenantId');
+  const d = db(c.env.DB);
+  const [tenant, template] = await Promise.all([
+    d.select().from(tenants).where(eq(tenants.id, tenantId)).get(),
+    d.select().from(templates).where(and(eq(templates.tenantId, tenantId), eq(templates.name, b.template ?? ''))).get(),
+  ]);
+  if (!tenant || !template) return c.json({ error: 'unknown_template' }, 404);
+
+  let rendered;
+  try {
+    rendered = renderTemplate(template, b.data ?? {});
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'bad_template_data' }, 400);
+  }
+  const hash = await addressHash(to);
+  const result = await sendTransactional(
+    {
+      blockingSuppression: async () =>
+        !!(await c.env.DB.prepare(
+          `select 1 from suppressions where tenant_id = ?1 and address_hash = ?2 and kind in ('hard_bounce', 'complaint', 'erased') limit 1`,
+        )
+          .bind(tenantId, hash)
+          .first()),
+      send: async (email) => {
+        const lane = resolveLane(c.env, tenant, 'transactional');
+        return lane
+          ? sendViaSes(lane, email)
+          : { ok: false, status: 0, error: 'transactional lane credentials missing', type: 'fatal', shouldRetry: false, shouldSuppress: false };
+      },
+      log: (message, err) => console.error(message, err),
+    },
+    { to, from: tenant.fromAddress, rendered },
+  );
+
+  // Record after the response so the record never delays a login email.
+  c.executionCtx.waitUntil(
+    d
+      .insert(transactionalMessages)
+      .values({
+        id: crypto.randomUUID(),
+        tenantId,
+        template: template.name,
+        addressHash: hash,
+        status: result.status === 202 ? 'sent' : result.status === 409 ? 'suppressed' : 'failed',
+        messageId: result.status === 202 ? result.body.messageId : null,
+        error: result.status === 202 || result.status === 409 ? null : result.body.error,
+      })
+      .then(() => undefined, (err: unknown) => console.error('transactional record failed', err)),
+  );
+  return c.json(result.body, result.status);
+});
