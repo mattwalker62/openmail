@@ -10,6 +10,7 @@ export default defineConfig({
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations(path.join(__dirname, 'drizzle')),
           ADMIN_API_TOKEN: 'test-admin-token',
+          PUBLIC_BASE_URL: 'https://openmail.test',
         },
       },
     })),

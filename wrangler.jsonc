@@ -9,6 +9,14 @@
     "bindings": [{ "name": "SEND_RATE_LIMITER", "class_name": "SendRateLimiter" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SendRateLimiter"] }],
+  "triggers": { "crons": ["* * * * *"] },
+  "queues": {
+    "producers": [{ "binding": "SEND_QUEUE", "queue": "openmail-send" }],
+    "consumers": [
+      { "queue": "openmail-send", "max_batch_size": 1, "max_retries": 5, "dead_letter_queue": "openmail-send-dlq" },
+      { "queue": "openmail-send-dlq", "max_batch_size": 10 }
+    ]
+  },
   "d1_databases": [
     {
       "binding": "DB",
