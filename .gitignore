@@ -5,3 +5,5 @@ node_modules/
 .infisical.json
 *.log
 .DS_Store
+dist/
+.gstack/

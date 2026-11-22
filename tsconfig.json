@@ -3,13 +3,33 @@
     "target": "ES2022",
     "module": "ES2022",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"],
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-plugin/types"
+    ],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./client/src/*"
+      ]
+    }
   },
-  "include": ["src", "test", "vitest.config.ts", "drizzle.config.ts"]
+  "include": [
+    "src",
+    "test",
+    "vitest.config.ts",
+    "drizzle.config.ts"
+  ],
+  "exclude": [
+    "client",
+    "dist"
+  ]
 }

@@ -4,5 +4,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 echo "== type-check"; npm run type-check
+echo "== build client"; npm run build:client
 echo "== test";       npm test
 echo "preflight: all gates passed"

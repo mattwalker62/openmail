@@ -6,7 +6,7 @@ import { sesEvents } from './routes/ses-events';
 import { unsubscribe } from './routes/unsubscribe';
 import { authorize } from './routes/authorize';
 import { owner } from './routes/owner';
-import { dashboard } from './routes/dashboard';
+import { dashboardApi } from './routes/dashboard';
 import OAuthProvider from '@cloudflare/workers-oauth-provider';
 import { mcpApiHandler } from './mcp/handler';
 import { processPage } from './campaigns/consumer';
@@ -30,8 +30,8 @@ app.route('/ses', sesEvents);
 app.route('/u', unsubscribe);
 app.route('/authorize', authorize);
 app.route('/', owner);
-app.route('/', dashboard);
 app.on(['GET', 'POST'], '/api/auth/*', (c) => createAuth(c.env).handler(c.req.raw));
+app.route('/api', dashboardApi);
 
 app.notFound((c) => c.json({ error: 'not_found' }, 404));
 
