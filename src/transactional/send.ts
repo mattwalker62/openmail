@@ -22,16 +22,17 @@ const escapeHtml = (v: string) =>
 const MAX_TEXT = 200;
 const MAX_URL = 2000;
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
-// Anything a mail client could turn into a link: a path, a backslash, or a dotted hostname.
-const LINK_SHAPED = /[\/\\]|[a-z0-9-]+\.[a-z]{2,}/i;
 const WHITESPACE_OR_CONTROL = /[\s\x00-\x1f\x7f]/;
+// Text values: letters, marks, digits, spaces and a little punctuation, nothing a mail client could
+// turn into a link. A dot is allowed only before a space or at the end (a sentence, never a domain).
+const PLAIN_TEXT = /^(?:[\p{L}\p{M}\p{N} ,'&()!?-]|\.(?= |$))+$/u;
 
 /**
  * Check one caller-supplied value with positive rules, so a leaked API key can't put someone else's
  * link in a login email from this domain:
  * - a URL must be absolute https on one of the template's allowed origins, contain no whitespace or
  *   control characters, stay under 2,000 characters, and round-trip exactly through the URL parser;
- * - anything else is short plain text with nothing link-shaped in it.
+ * - anything else is short plain text matching a positive allowlist, after NFKC normalisation.
  */
 function checkValue(key: string, value: string, linkOrigins: string[]): void {
   if (SCHEME.test(value)) {
@@ -48,9 +49,8 @@ function checkValue(key: string, value: string, linkOrigins: string[]): void {
     return;
   }
   if (value.length > MAX_TEXT) throw new Error(`value too long: ${key}`);
-  if (LINK_SHAPED.test(value) || WHITESPACE_OR_CONTROL.test(value.replace(/ /g, ''))) {
-    throw new Error(`link not allowed in text: ${key}`);
-  }
+  // NFKC folds lookalikes (fullwidth and ideographic dots) to ASCII before the allowlist runs.
+  if (!PLAIN_TEXT.test(value.normalize('NFKC'))) throw new Error(`link not allowed in text: ${key}`);
 }
 
 /** Fill `{{name}}` placeholders. Values are HTML-escaped in the html body; a missing value is an error. */

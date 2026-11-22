@@ -12,9 +12,9 @@ const template = {
 
 describe('renderTemplate', () => {
   it('fills placeholders, HTML-escaping values in the html body only', () => {
-    const out = renderTemplate(template, { site: 'Beacon', url: 'https://x.test/l?a=1&b=2', name: 'Al <& Co>' });
+    const out = renderTemplate(template, { site: 'Beacon', url: 'https://x.test/l?a=1&b=2', name: "Al & Co's" });
     expect(out.subject).toBe('Sign in to Beacon');
-    expect(out.html).toBe('<a href="https://x.test/l?a=1&amp;b=2">Sign in</a> Al &lt;&amp; Co&gt;');
+    expect(out.html).toBe('<a href="https://x.test/l?a=1&amp;b=2">Sign in</a> Al &amp; Co&#39;s');
     expect(out.text).toBe('Sign in: https://x.test/l?a=1&b=2');
   });
 
@@ -31,6 +31,11 @@ describe('renderTemplate', () => {
     ['backslash link', '\\\\evil.example\\login'],
     ['bare domain', 'evil.example/login'],
     ['bare domain without path', 'evil.example'],
+    ['fullwidth-dot domain', 'evil\uFF0Ecom'],
+    ['ideographic-dot domain', 'evil\u3002com'],
+    ['non-Latin TLD', 'evil.\u0440\u0444'],
+    ['mailto', 'write mailto:evil'],
+    ['an email address', 'evil@example'],
   ])('refuses a text value that is a %s', (_, value) => {
     expect(() => renderTemplate(template, { site: value, url: 'https://x.test/l', name: 'Al' })).toThrow(/not allowed in text/);
   });
@@ -42,6 +47,12 @@ describe('renderTemplate', () => {
     ['an over-long URL', 'https://x.test/' + 'a'.repeat(2000)],
   ])('refuses a link with %s', (_, url) => {
     expect(() => renderTemplate(template, { site: 'B', url, name: 'Al' })).toThrow(/bad link|link origin not allowed|too long/);
+  });
+
+  it('accepts ordinary names and phrases, including a sentence-ending period and non-Latin letters', () => {
+    for (const v of ["Al O'Neil", 'Ana-María', 'Zoë & Co (UK)', 'Thanks.', 'Привет, Анна', '東京']) {
+      expect(() => renderTemplate(template, { site: v, url: 'https://x.test/l', name: 'Al' })).not.toThrow();
+    }
   });
 
   it('refuses a plain-text value that smuggles a URL or runs long', () => {
