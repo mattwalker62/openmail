@@ -265,3 +265,202 @@ dashboardApi.post('/t/:tenantId/policies/:id/revoke', async (c) => {
     .where(and(eq(policies.id, c.req.param('id')), eq(policies.tenantId, tenantId)));
   return c.json({ ok: true });
 });
+
+// ── Home: activity, the period's numbers, scorecard and recommended actions ──
+
+const DAY = 24 * 60 * 60 * 1000;
+const RANGES = [7, 30, 90] as const;
+/** Days without a send before "write to your readers" is suggested. */
+const QUIET_DAYS = 14;
+
+const rate = (n: number, of: number) => (of > 0 ? n / of : null);
+
+dashboardApi.get('/t/:tenantId/home', async (c) => {
+  const tenantId = c.req.param('tenantId');
+  const owner = await ownerOf(c, tenantId);
+  if (owner instanceof Response) return owner;
+  const asked = Number(c.req.query('days') ?? 7);
+  const days = RANGES.find((r) => asked <= r) ?? 90;
+  const now = Date.now();
+  const since = now - days * DAY;
+  const q = <T>(sql: string, ...args: unknown[]) => c.env.DB.prepare(sql).bind(...args).first<T>();
+
+  const [newSubs, sentRows, waiting, scheduled, supp, totals, lastSend, lastSignup, unsentDrafts, tenant, quietSince] = await Promise.all([
+    q<{ n: number }>('select count(*) as n from contacts where tenant_id = ?1 and created_at >= ?2', tenantId, since),
+    q<{ n: number }>(
+      `select count(*) as n from campaign_recipients r join campaigns c on c.id = r.campaign_id
+       where c.tenant_id = ?1 and r.status = 'sent' and r.claimed_at >= ?2`,
+      tenantId,
+      since,
+    ),
+    q<{ n: number; first: string | null }>(
+      `select count(*) as n, min(id) as first from campaigns where tenant_id = ?1
+       and (status = 'awaiting_approval' or (status = 'paused' and pause_reason != 'owner'))`,
+      tenantId,
+    ),
+    q<{ n: number }>(`select count(*) as n from campaigns where tenant_id = ?1 and status = 'approved' and scheduled_at > ?2`, tenantId, now),
+    q<{ bounces: number; complaints: number; unsubscribes: number }>(
+      `select sum(kind = 'hard_bounce') as bounces, sum(kind = 'complaint') as complaints, sum(kind = 'unsubscribe') as unsubscribes
+       from suppressions where tenant_id = ?1 and created_at >= ?2`,
+      tenantId,
+      since,
+    ),
+    q<{ total: number; atStart: number }>(
+      'select count(*) as total, sum(created_at < ?2) as atStart from contacts where tenant_id = ?1',
+      tenantId,
+      since,
+    ),
+    q<{ subject: string; sentAt: number; delivered: number }>(
+      `select d.subject, max(r.claimed_at) as sentAt, count(*) as delivered from campaign_recipients r
+       join campaigns c on c.id = r.campaign_id join drafts d on d.id = c.draft_id
+       where c.tenant_id = ?1 and r.status = 'sent' group by c.id order by sentAt desc limit 1`,
+      tenantId,
+    ),
+    q<{ email: string; at: number }>('select email, created_at as at from contacts where tenant_id = ?1 order by created_at desc limit 1', tenantId),
+    q<{ n: number; subject: string | null }>(
+      `select count(*) as n, (select subject from drafts d2 where d2.tenant_id = ?1 and not exists
+         (select 1 from campaigns c2 where c2.draft_id = d2.id) order by d2.created_at desc limit 1) as subject
+       from drafts d where d.tenant_id = ?1 and not exists (select 1 from campaigns c where c.draft_id = d.id)`,
+      tenantId,
+    ),
+    q<{ context: string }>('select context from tenants where id = ?1', tenantId),
+    q<{ last: number | null }>(
+      `select max(r.claimed_at) as last from campaign_recipients r join campaigns c on c.id = r.campaign_id
+       where c.tenant_id = ?1 and r.status = 'sent'`,
+      tenantId,
+    ),
+  ]);
+
+  // Contacts over time: running total at the end of each day in the range.
+  const created = await c.env.DB.prepare('select created_at as at from contacts where tenant_id = ?1 and created_at >= ?2 order by created_at')
+    .bind(tenantId, since)
+    .all<{ at: number }>();
+  const contactsOverTime: Array<{ date: string; total: number }> = [];
+  let running = totals?.atStart ?? 0;
+  let i = 0;
+  for (let day = days - 1; day >= 0; day--) {
+    const end = now - day * DAY;
+    while (i < created.results.length && created.results[i]!.at <= end) {
+      running += 1;
+      i += 1;
+    }
+    contactsOverTime.push({ date: new Date(end).toISOString().slice(0, 10), total: running });
+  }
+
+  const sent = sentRows?.n ?? 0;
+  const contacts = totals?.total ?? 0;
+  const recommendations: Array<{ kind: string; title: string; detail: string; href: string }> = [];
+  if ((waiting?.n ?? 0) > 0) {
+    recommendations.push({
+      kind: 'approve',
+      title: waiting!.n === 1 ? '1 send is waiting for you' : `${waiting!.n} sends are waiting for you`,
+      detail: 'Nothing goes out until you approve it.',
+      href: `/approve/${waiting!.first}`,
+    });
+  }
+  if ((unsentDrafts?.n ?? 0) > 0) {
+    recommendations.push({
+      kind: 'finish_draft',
+      title: 'Finish your draft',
+      detail: `"${unsentDrafts!.subject}" hasn't been sent.`,
+      href: `/t/${tenantId}/agent`,
+    });
+  }
+  const quiet = !quietSince?.last || now - quietSince.last > QUIET_DAYS * DAY;
+  if (contacts > 0 && quiet) {
+    recommendations.push({
+      kind: 'write_to_readers',
+      title: `Write to your ${contacts.toLocaleString('en')} ${contacts === 1 ? 'reader' : 'readers'}`,
+      detail: quietSince?.last ? `Your last email went out ${Math.round((now - quietSince.last) / DAY)} days ago.` : 'Nothing sent yet. Ask your agent to draft one.',
+      href: `/t/${tenantId}/agent`,
+    });
+  }
+  if (!tenant?.context.trim()) {
+    recommendations.push({
+      kind: 'add_context',
+      title: 'Add your voice notes',
+      detail: 'Agents read them before drafting.',
+      href: `/t/${tenantId}/context`,
+    });
+  }
+
+  return c.json({
+    days,
+    period: {
+      newSubscribers: newSubs?.n ?? 0,
+      emailsSent: sent,
+      awaitingApproval: waiting?.n ?? 0,
+      scheduled: scheduled?.n ?? 0,
+      bouncesAndComplaints: (supp?.bounces ?? 0) + (supp?.complaints ?? 0),
+    },
+    totals: { contacts, contactsAtStart: totals?.atStart ?? 0 },
+    scorecard: {
+      sent,
+      bounceRate: rate(supp?.bounces ?? 0, sent),
+      complaintRate: rate(supp?.complaints ?? 0, sent),
+      unsubscribeRate: rate(supp?.unsubscribes ?? 0, sent),
+    },
+    recent: {
+      lastSend: lastSend ?? null,
+      lastSignup: lastSignup ?? null,
+    },
+    contactsOverTime,
+    recommendations,
+  });
+});
+
+// ── Contacts list ────────────────────────────────────────────────────────────
+
+/**
+ * Contacts newest first, with their lists and a single status. Search matches anywhere in the
+ * address as plain text. Paged by a (created_at, id) cursor so new sign-ups don't shift pages.
+ */
+dashboardApi.get('/t/:tenantId/contacts', async (c) => {
+  const tenantId = c.req.param('tenantId');
+  const owner = await ownerOf(c, tenantId);
+  if (owner instanceof Response) return owner;
+  const search = (c.req.query('q') ?? '').trim().toLowerCase();
+  const limit = Math.min(100, Math.max(1, Number(c.req.query('limit') ?? 50) || 50));
+  const [cursorAt, cursorId] = (c.req.query('cursor') ?? '').split('|');
+  const hasCursor = cursorAt !== undefined && cursorAt !== '' && cursorId !== undefined;
+
+  const rows = await c.env.DB.prepare(
+    `select c.id, c.email, c.name, c.created_at as createdAt, c.unsubscribed_at as unsubscribedAt,
+       (select group_concat(l.name, ',') from list_members lm join lists l on l.id = lm.list_id where lm.contact_id = c.id) as lists,
+       (select group_concat(s.kind, ',') from suppressions s where s.tenant_id = c.tenant_id and s.address_hash = c.address_hash) as kinds
+     from contacts c
+     where c.tenant_id = ?1 and (?2 = '' or instr(c.email, ?2) > 0)
+       and (?3 = 0 or c.created_at < ?4 or (c.created_at = ?4 and c.id < ?5))
+     order by c.created_at desc, c.id desc limit ?6`,
+  )
+    .bind(tenantId, search, hasCursor ? 1 : 0, Number(cursorAt ?? 0), cursorId ?? '', limit + 1)
+    .all<{ id: string; email: string; name: string | null; createdAt: number; unsubscribedAt: number | null; lists: string | null; kinds: string | null }>();
+  const total = await c.env.DB.prepare(`select count(*) as n from contacts where tenant_id = ?1 and (?2 = '' or instr(email, ?2) > 0)`)
+    .bind(tenantId, search)
+    .first<{ n: number }>();
+
+  const page = rows.results.slice(0, limit);
+  const statusOf = (kinds: string[], unsubscribedAt: number | null) =>
+    kinds.includes('erased')
+      ? 'erased'
+      : kinds.includes('complaint')
+        ? 'complained'
+        : kinds.includes('hard_bounce')
+          ? 'bounced'
+          : unsubscribedAt || kinds.includes('unsubscribe')
+            ? 'unsubscribed'
+            : 'subscribed';
+  const last = page.at(-1);
+  return c.json({
+    total: total?.n ?? 0,
+    contacts: page.map((r) => ({
+      id: r.id,
+      email: r.email,
+      name: r.name,
+      createdAt: r.createdAt,
+      lists: r.lists ? r.lists.split(',').sort() : [],
+      status: statusOf(r.kinds ? r.kinds.split(',') : [], r.unsubscribedAt),
+    })),
+    nextCursor: rows.results.length > limit && last ? `${last.createdAt}|${last.id}` : null,
+  });
+});

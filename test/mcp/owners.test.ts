@@ -1,6 +1,6 @@
 import { env, SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { createTenant } from '../helpers';
+import { createTenant, signInOwner } from '../helpers';
 
 const form = (fields: Record<string, string>) => ({
   method: 'POST',
@@ -65,12 +65,30 @@ describe('sign-in redirects', () => {
   it.each(['//evil.example/x', '/\\evil.example', '/\t/evil.example', 'https://evil.example/', '/%0d%0a//evil.example'])(
     'never sends someone off-site after sign-in (next=%s)',
     async (next) => {
-      const page = await SELF.fetch(`https://openmail.test/login?next=${encodeURIComponent(next)}`);
-      const html = await page.text();
-      const value = /name="next" value="([^"]*)"/.exec(html)?.[1] ?? '';
-      expect(value.startsWith('/') && !value.startsWith('//') && !value.includes('evil.example')).toBe(true);
+      const t = await createTenant();
+      const { email } = await signInOwner(t.slug);
+      const res = await SELF.fetch('https://openmail.test/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'cf-connecting-ip': `10.9.${Math.floor(Math.random() * 250)}.1` },
+        body: JSON.stringify({ email, password: 'correct horse battery staple', next }),
+      });
+      expect(res.status).toBe(200);
+      const { redirect } = (await res.json()) as { redirect: string };
+      expect(redirect.startsWith('/') && !redirect.startsWith('//') && !redirect.includes('evil.example')).toBe(true);
+      expect(res.headers.get('set-cookie')).toMatch(/session_token=/);
     },
   );
+
+  it('answers a wrong password with 401 and a message, not a session', async () => {
+    const res = await SELF.fetch('https://openmail.test/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'cf-connecting-ip': '10.8.0.1' },
+      body: JSON.stringify({ email: 'nobody@example.com', password: 'wrong password here' }),
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'That email and password do not match.' });
+    expect(res.headers.get('set-cookie')).toBeNull();
+  });
 });
 
 describe('brute-force protection', () => {

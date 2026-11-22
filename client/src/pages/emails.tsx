@@ -12,7 +12,7 @@ import { api, post, type CampaignRow } from '@/lib/api';
 
 type Action = 'pause' | 'resume' | 'cancel' | 'resend-unknowns';
 
-export function OverviewPage() {
+export function EmailsPage() {
   const { tenantId } = useParams({ strict: false }) as { tenantId: string };
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
@@ -27,7 +27,7 @@ export function OverviewPage() {
 
   return (
     <>
-      <PageHeader title="Overview" description="Sends waiting for you, and everything sent recently." />
+      <PageHeader title="Emails" description="Sends waiting for you, and everything sent recently." />
 
       <Card className="mb-6">
         <CardHeader>
