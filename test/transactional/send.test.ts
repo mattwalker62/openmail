@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderTemplate, sendTransactional, type TransactionalDeps } from '../../src/transactional/send';
 import { api, createTenant } from '../helpers';
 
-const template = { subject: 'Sign in to {{site}}', html: '<a href="{{url}}">Sign in</a> {{name}}', text: 'Sign in: {{url}}' };
+const template = {
+  subject: 'Sign in to {{site}}',
+  html: '<a href="{{url}}">Sign in</a> {{name}}',
+  text: 'Sign in: {{url}}',
+  linkOrigins: ['https://x.test', 'https://b.test'],
+};
 
 describe('renderTemplate', () => {
   it('fills placeholders, HTML-escaping values in the html body only', () => {
@@ -16,12 +21,22 @@ describe('renderTemplate', () => {
   it('leaves no unfilled placeholder: a missing value is an error', () => {
     expect(() => renderTemplate(template, { site: 'Beacon' })).toThrow(/missing template data: url/);
   });
+
+  it("refuses a link outside the template's allowed origins, so a leaked key can't send someone else's link", () => {
+    expect(() => renderTemplate(template, { site: 'B', url: 'https://evil.example/l', name: 'Al' })).toThrow(/link origin not allowed/);
+  });
+
+  it('refuses a plain-text value that smuggles a URL or runs long', () => {
+    expect(() => renderTemplate(template, { site: 'go to https://evil.example', url: 'https://x.test/l', name: 'Al' })).toThrow(/not allowed in text/);
+    expect(() => renderTemplate(template, { site: 'B', url: 'https://x.test/l', name: 'a'.repeat(201) })).toThrow(/too long/);
+  });
 });
 
 describe('sendTransactional (D5: fail open on the suppression lookup)', () => {
   const base = (over: Partial<TransactionalDeps> = {}): TransactionalDeps => ({
     blockingSuppression: vi.fn(async () => false),
     send: vi.fn(async () => ({ ok: true as const, messageId: 'tx-1' })),
+    suppress: vi.fn(async () => {}),
     log: vi.fn(),
     ...over,
   });
@@ -38,6 +53,13 @@ describe('sendTransactional (D5: fail open on the suppression lookup)', () => {
     const result = await sendTransactional(deps, { to: 'x@example.com', from: 'f@x.test', rendered: { subject: 's', html: 'h' } });
     expect(result).toEqual({ status: 202, body: { messageId: 'tx-1' } });
     expect(deps.log).toHaveBeenCalled();
+  });
+
+  it('suppresses an address SES says will never work and answers 422 so the caller stops retrying', async () => {
+    const deps = base({ send: vi.fn(async () => ({ ok: false as const, status: 400, error: 'Address blacklisted for a@x', type: 'non_retryable' as const, shouldRetry: false, shouldSuppress: true })) });
+    const result = await sendTransactional(deps, { to: 'x@example.com', from: 'f', rendered: { subject: 's', html: 'h' } });
+    expect(result).toEqual({ status: 422, body: { error: 'non_retryable:400' } });
+    expect(deps.suppress).toHaveBeenCalledWith('x@example.com');
   });
 
   it('answers 429 on an SES throttle so the caller can retry, and 502 on other failures', async () => {

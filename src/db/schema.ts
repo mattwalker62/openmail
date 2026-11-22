@@ -242,6 +242,8 @@ export const templates = sqliteTable(
     subject: text('subject').notNull(),
     html: text('html').notNull(),
     text: text('text'),
+    /** JSON array of origins a URL value may point at (e.g. ["https://mattwalker.co"]). */
+    linkOrigins: text('link_origins').notNull().default('[]'),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.tenantId, t.name] })],

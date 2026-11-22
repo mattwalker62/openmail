@@ -67,12 +67,14 @@ admin.post('/tenants', async (c) => {
 
 /** Create or replace a transactional template. Owner-managed; agents can never reach this. */
 admin.put('/tenants/:slug/templates/:name', async (c) => {
-  const b = (await c.req.json().catch(() => null)) as { subject?: string; html?: string; text?: string } | null;
+  const b = (await c.req.json().catch(() => null)) as { subject?: string; html?: string; text?: string; linkOrigins?: string[] } | null;
   if (!b?.subject || !b.html) return c.json({ error: 'subject_and_html_required' }, 400);
+  const linkOrigins = b.linkOrigins ?? [];
+  if (!linkOrigins.every((o) => /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(o))) return c.json({ error: 'invalid_link_origins' }, 400);
   const d = db(c.env.DB);
   const tenant = await d.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, c.req.param('slug'))).get();
   if (!tenant) return c.json({ error: 'not_found' }, 404);
-  const values = { subject: b.subject, html: b.html, text: b.text ?? null };
+  const values = { subject: b.subject, html: b.html, text: b.text ?? null, linkOrigins: JSON.stringify(linkOrigins) };
   await d
     .insert(templates)
     .values({ tenantId: tenant.id, name: c.req.param('name'), ...values })

@@ -111,8 +111,10 @@ v1.post('/contacts/erase', async (c) => {
 
   await d.batch([
     d.insert(suppressions).values({ tenantId, addressHash: hash, kind: 'erased' }).onConflictDoNothing(),
-    // Campaign snapshots hold a copy of the address and delivery history: erase them too.
+    // Campaign snapshots hold a copy of the address and delivery history: erase them too, along with
+    // this address's transactional send records.
     d.delete(campaignRecipients).where(inArray(campaignRecipients.contactId, ids)),
+    d.delete(transactionalMessages).where(and(eq(transactionalMessages.tenantId, tenantId), eq(transactionalMessages.addressHash, hash))),
     d.delete(listMembers).where(inArray(listMembers.contactId, ids)),
     d.delete(contacts).where(and(eq(contacts.tenantId, tenantId), eq(contacts.email, email))),
   ]);
@@ -225,7 +227,7 @@ v1.post('/messages', async (c) => {
 
   let rendered;
   try {
-    rendered = renderTemplate(template, b.data ?? {});
+    rendered = renderTemplate({ ...template, linkOrigins: JSON.parse(template.linkOrigins) as string[] }, b.data ?? {});
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : 'bad_template_data' }, 400);
   }
@@ -243,6 +245,9 @@ v1.post('/messages', async (c) => {
         return lane
           ? sendViaSes(lane, email)
           : { ok: false, status: 0, error: 'transactional lane credentials missing', type: 'fatal', shouldRetry: false, shouldSuppress: false };
+      },
+      suppress: async () => {
+        await d.insert(suppressions).values({ tenantId, addressHash: hash, kind: 'hard_bounce' }).onConflictDoNothing();
       },
       log: (message, err) => console.error(message, err),
     },
