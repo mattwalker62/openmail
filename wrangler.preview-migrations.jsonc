@@ -1,0 +1,14 @@
+{
+  // Used only to apply Drizzle migrations to the shared Preview database (Cloudflare's documented
+  // pattern). Must point at the same database as `previews.d1_databases` in wrangler.jsonc.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "openmail-preview-migrations",
+  "d1_databases": [
+    {
+      "binding": "PREVIEW_DB",
+      "database_name": "openmail-preview",
+      "database_id": "29afb394-1d8f-44d1-97bd-a2b6c47addaf",
+      "migrations_dir": "drizzle"
+    }
+  ]
+}

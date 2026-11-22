@@ -22,6 +22,17 @@ owner can approve a send.
 - **Run `npm run preflight` before pushing.** It runs the same gates as CI; add any new CI gate to
   `scripts/preflight.sh` in the same commit.
 
+## Environments
+- **Local** (`npm test`, `npm run dev`): the inner loop. Real Workers runtime, local D1, queues and
+  Durable Objects; nothing leaves the machine.
+- **Previews** (Cloudflare Worker Previews): every pull request gets one from `.github/workflows/preview.yml`.
+  Bound to preview-only D1 (`openmail-preview`), KV and queue, with no SES credentials; queue consumers
+  and cron don't run there, so a Preview can never send email. Links use the Preview's own address
+  (`OPENMAIL_PREVIEW=1`). Preview secrets (`BETTER_AUTH_SECRET`, `ADMIN_API_TOKEN`) are separate from
+  production's and set in the Preview base config.
+- **Production** (`mail.mattwalker.co`): deployed only from `main`. Real sends are first tested here
+  with a seed list before any real audience moves over.
+
 ## Commands
 | Want to… | Run |
 |---|---|
