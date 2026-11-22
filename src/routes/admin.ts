@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { db } from '../db/client';
-import { apiKeys, tenants } from '../db/schema';
+import { apiKeys, templates, tenants } from '../db/schema';
+import { eq } from 'drizzle-orm';
 import type { Env } from '../env';
 import { generateApiKey, hashApiKey } from '../auth/api-keys';
 import { AWS_REGION } from '../transport/ses';
@@ -62,4 +63,21 @@ admin.post('/tenants', async (c) => {
   ]);
   // The only time the key is shown: only its hash is stored.
   return c.json({ id, slug: t.slug, apiKey }, 201);
+});
+
+/** Create or replace a transactional template. Owner-managed; agents can never reach this. */
+admin.put('/tenants/:slug/templates/:name', async (c) => {
+  const b = (await c.req.json().catch(() => null)) as { subject?: string; html?: string; text?: string; linkOrigins?: string[] } | null;
+  if (!b?.subject || !b.html) return c.json({ error: 'subject_and_html_required' }, 400);
+  const linkOrigins = b.linkOrigins ?? [];
+  if (!linkOrigins.every((o) => /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(o))) return c.json({ error: 'invalid_link_origins' }, 400);
+  const d = db(c.env.DB);
+  const tenant = await d.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, c.req.param('slug'))).get();
+  if (!tenant) return c.json({ error: 'not_found' }, 404);
+  const values = { subject: b.subject, html: b.html, text: b.text ?? null, linkOrigins: JSON.stringify(linkOrigins) };
+  await d
+    .insert(templates)
+    .values({ tenantId: tenant.id, name: c.req.param('name'), ...values })
+    .onConflictDoUpdate({ target: [templates.tenantId, templates.name], set: values });
+  return c.json({ ok: true });
 });

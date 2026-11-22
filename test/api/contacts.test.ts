@@ -89,3 +89,17 @@ describe('POST /v1/contacts/erase', () => {
     expect((await erase()).status).toBe(200);
   });
 });
+
+describe('erasure reaches transactional send records', () => {
+  it('deletes transactional_messages rows for the erased address', async () => {
+    const t = await createTenant();
+    const { addressHash } = await import('../../src/lib/address');
+    await env.DB.prepare("insert into transactional_messages (id, tenant_id, template, address_hash, status) values (?, ?, 'login', ?, 'sent')")
+      .bind(crypto.randomUUID(), t.id, await addressHash('gone@example.com')).run();
+
+    await api(t.apiKey, '/v1/contacts/erase', { method: 'POST', body: JSON.stringify({ email: 'gone@example.com' }) });
+
+    const n = await env.DB.prepare('select count(*) as n from transactional_messages where tenant_id = ?').bind(t.id).first<{ n: number }>();
+    expect(n?.n).toBe(0);
+  });
+});

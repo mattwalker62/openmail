@@ -1,0 +1,1 @@
+ALTER TABLE `templates` ADD `link_origins` text DEFAULT '[]' NOT NULL;

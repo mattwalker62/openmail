@@ -15,6 +15,20 @@
       "when": 1795357015409,
       "tag": "0001_campaigns",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795357371503,
+      "tag": "0002_transactional",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1795357682900,
+      "tag": "0003_template_links",
+      "breakpoints": true
     }
   ]
 }
