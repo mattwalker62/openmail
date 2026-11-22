@@ -112,8 +112,9 @@ describe('POST /ses/:tenantId', () => {
     expect((await snsPost(t.id, otherTopic)).status).toBe(403);
 
     expect(await check(t.apiKey, 'x@example.com')).toEqual({ suppressed: false, kinds: [] });
-    const q = await env.DB.prepare('select count(*) as n from webhook_quarantine where tenant_id = ?').bind(t.id).first<{ n: number }>();
-    expect(q?.n).toBe(2);
+    const q = await env.DB.prepare('select * from webhook_quarantine where tenant_id = ?').bind(t.id).all();
+    expect(q.results).toHaveLength(2);
+    expect(JSON.stringify(q.results)).not.toContain('@'); // no recipient address is kept
   });
 
   it('confirms a subscription for an allowed topic by visiting its SubscribeURL', async () => {
@@ -139,7 +140,7 @@ describe('POST /ses/:tenantId', () => {
 });
 
 describe('hosted unsubscribe', () => {
-  async function contactToken(apiKey: string, email: string, unsubscribeToken?: string) {
+  async function contactToken(apiKey: string, email: string, unsubscribeToken?: string): Promise<string> {
     await api(apiKey, '/v1/contacts', { method: 'POST', body: JSON.stringify({ email, lists: ['beacon'], ...(unsubscribeToken ? { unsubscribeToken } : {}) }) });
     const row = await env.DB.prepare('select unsubscribe_token from contacts where email = ?').bind(email).first<{ unsubscribe_token: string }>();
     return row!.unsubscribe_token;
@@ -149,31 +150,47 @@ describe('hosted unsubscribe', () => {
     const t = await createTenant();
     const token = await contactToken(t.apiKey, 'reader@example.com');
 
-    const page = await SELF.fetch(`https://openmail.test/u/${token}`);
+    const page = await SELF.fetch(`https://openmail.test/u/${t.id}/${token}`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain('<form method="post"');
     expect(await check(t.apiKey, 'reader@example.com')).toEqual({ suppressed: false, kinds: [] });
 
-    const done = await SELF.fetch(`https://openmail.test/u/${token}`, { method: 'POST' });
+    const done = await SELF.fetch(`https://openmail.test/u/${t.id}/${token}`, { method: 'POST' });
     expect(done.status).toBe(200);
     expect(await check(t.apiKey, 'reader@example.com')).toEqual({ suppressed: true, kinds: ['unsubscribe'] });
   });
 
-  it('honours an RFC 8058 one-click POST and a token imported from an old stack', async () => {
+  it('honours an RFC 8058 one-click POST', async () => {
     const t = await createTenant();
-    const imported = 'legacy-token-0123456789abcdef';
-    await contactToken(t.apiKey, 'old@example.com', imported);
+    const token = await contactToken(t.apiKey, 'one@example.com');
 
-    const res = await SELF.fetch(`https://openmail.test/u/${imported}`, {
+    const res = await SELF.fetch(`https://openmail.test/u/${t.id}/${token}`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: 'List-Unsubscribe=One-Click',
     });
     expect(res.status).toBe(200);
-    expect(await check(t.apiKey, 'old@example.com')).toEqual({ suppressed: true, kinds: ['unsubscribe'] });
+    expect(await check(t.apiKey, 'one@example.com')).toEqual({ suppressed: true, kinds: ['unsubscribe'] });
   });
 
-  it('answers 404 for an unknown token', async () => {
-    expect((await SELF.fetch('https://openmail.test/u/nope-nope-nope-nope')).status).toBe(404);
+  it('lets an old stack proxy an imported token through its own API key, scoped to its tenant', async () => {
+    const a = await createTenant();
+    const b = await createTenant();
+    const imported = 'legacy-token-0123456789abcdef';
+    await contactToken(a.apiKey, 'old@example.com', imported);
+    await contactToken(b.apiKey, 'other@example.com', imported); // same token, other tenant: allowed, no collision
+
+    const res = await api(a.apiKey, '/v1/unsubscribe', { method: 'POST', body: JSON.stringify({ token: imported }) });
+    expect(await res.json()).toEqual({ unsubscribed: true });
+    expect(await check(a.apiKey, 'old@example.com')).toEqual({ suppressed: true, kinds: ['unsubscribe'] });
+    expect(await check(b.apiKey, 'other@example.com')).toEqual({ suppressed: false, kinds: [] });
+  });
+
+  it("answers 404 for an unknown token, and for a real token under another tenant's id", async () => {
+    const a = await createTenant();
+    const b = await createTenant();
+    const token = await contactToken(a.apiKey, 'mine@example.com');
+    expect((await SELF.fetch(`https://openmail.test/u/${a.id}/nope-nope-nope-nope`)).status).toBe(404);
+    expect((await SELF.fetch(`https://openmail.test/u/${b.id}/${token}`)).status).toBe(404);
   });
 });

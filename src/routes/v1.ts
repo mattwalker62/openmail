@@ -18,6 +18,7 @@ import {
 import { renderTemplate, sendTransactional } from '../transactional/send';
 import { resolveLane } from '../transport/lanes';
 import { sendViaSes } from '../transport/ses';
+import { markUnsubscribed } from './unsubscribe';
 import type { Env } from '../env';
 import { addressHash, isValidEmail, normalizeEmail, randomToken } from '../lib/address';
 
@@ -275,4 +276,21 @@ v1.post('/messages', async (c) => {
       .then(() => undefined, (err: unknown) => console.error('transactional record failed', err)),
   );
   return c.json(result.body, result.status);
+});
+
+/**
+ * Unsubscribe by token, scoped to the caller's tenant. This is how an old stack's unsubscribe route
+ * proxies links already in inboxes (imported tokens): only that tenant's key can use its tokens.
+ */
+v1.post('/unsubscribe', async (c) => {
+  const b = (await c.req.json().catch(() => ({}))) as { token?: string };
+  if (!b.token) return c.json({ error: 'token_required' }, 400);
+  const contact = await db(c.env.DB)
+    .select({ id: contacts.id, tenantId: contacts.tenantId, email: contacts.email })
+    .from(contacts)
+    .where(and(eq(contacts.tenantId, c.get('tenantId')), eq(contacts.unsubscribeToken, b.token)))
+    .get();
+  if (!contact) return c.json({ error: 'not_found' }, 404);
+  await markUnsubscribed(c.env, contact);
+  return c.json({ unsubscribed: true });
 });

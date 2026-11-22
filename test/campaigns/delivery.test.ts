@@ -4,6 +4,7 @@ import { processPage, type DeliveryDeps } from '../../src/campaigns/consumer';
 import { reconcile } from '../../src/campaigns/reconciler';
 import { approveCampaign, createDraft, requestCampaign, setCampaignStatus } from '../../src/campaigns/service';
 import { db } from '../../src/db/client';
+import { addressHash } from '../../src/lib/address';
 import type { SendResult } from '../../src/transport/ses';
 import { api, createTenant } from '../helpers';
 
@@ -11,12 +12,19 @@ const LEASE_MS = 2 * 60 * 1000;
 
 async function approvedCampaign(count: number) {
   const t = await createTenant();
-  for (let i = 0; i < count; i++) {
-    await api(t.apiKey, '/v1/contacts', {
-      method: 'POST',
-      body: JSON.stringify({ email: `r${String(i).padStart(3, '0')}@x.com`, lists: ['beacon'] }),
-    });
+  // Seed through the API once (creates the list), then in one D1 batch: hundreds of HTTP calls are slow.
+  await api(t.apiKey, '/v1/contacts', { method: 'POST', body: JSON.stringify({ email: 'r000@x.com', lists: ['beacon'] }) });
+  const list = (await env.DB.prepare('select id from lists where tenant_id = ?').bind(t.id).first<{ id: string }>())!.id;
+  const rows = [];
+  for (let i = 1; i < count; i++) {
+    const id = crypto.randomUUID();
+    const email = `r${String(i).padStart(3, '0')}@x.com`;
+    rows.push(
+      env.DB.prepare('insert into contacts (id, tenant_id, email, address_hash, unsubscribe_token) values (?, ?, ?, ?, ?)').bind(id, t.id, email, await addressHash(email), crypto.randomUUID()),
+      env.DB.prepare('insert into list_members (list_id, contact_id) values (?, ?)').bind(list, id),
+    );
   }
+  if (rows.length) await env.DB.batch(rows);
   const keyId = (await env.DB.prepare('select id from api_keys where tenant_id = ?').bind(t.id).first<{ id: string }>())!.id;
   const d = db(env.DB);
   const draft = await createDraft(d, t.id, { subject: 'S', html: '<p>h</p>' }, 'api');
@@ -119,7 +127,7 @@ describe('processPage (queue consumer)', () => {
     expect(sent).toHaveLength(5);
     expect(acquired).toEqual([2, 2, 1]);
     const firstCall = (dd.send as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(firstCall[1].unsubscribeUrl).toMatch(/^https:\/\/openmail\.test\/u\/[A-Za-z0-9_-]+$/);
+    expect(firstCall[1].unsubscribeUrl).toBe(`https://openmail.test/u/${t.id}/${(await env.DB.prepare('select unsubscribe_token from contacts where tenant_id = ? and email = ?').bind(t.id, firstCall[1].to).first<{ unsubscribe_token: string }>())!.unsubscribe_token}`);
     expect(Object.values(await statusOf(campaignId))).toEqual(['sent', 'sent', 'sent', 'sent', 'sent']);
   });
 

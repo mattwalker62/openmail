@@ -24,12 +24,18 @@ sesEvents.post('/:tenantId', async (c) => {
   const tenantId = c.req.param('tenantId');
   const raw = await c.req.text();
   const d = db(c.env.DB);
+  let m: SnsMessage | undefined;
   const quarantine = async (reason: string) => {
-    await d.insert(webhookQuarantine).values({ id: crypto.randomUUID(), tenantId, reason, body: raw.slice(0, 10_000) });
+    await d.insert(webhookQuarantine).values({
+      id: crypto.randomUUID(),
+      tenantId,
+      reason,
+      topicArn: typeof m?.TopicArn === 'string' ? m.TopicArn.slice(0, 300) : null,
+      messageId: typeof m?.MessageId === 'string' ? m.MessageId.slice(0, 100) : null,
+    });
     return c.json({ error: 'forbidden' }, 403);
   };
 
-  let m: SnsMessage;
   try {
     m = JSON.parse(raw) as SnsMessage;
   } catch {

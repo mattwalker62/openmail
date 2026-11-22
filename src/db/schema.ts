@@ -61,7 +61,8 @@ export const contacts = sqliteTable(
   },
   (t) => [
     uniqueIndex('contacts_tenant_email_idx').on(t.tenantId, t.email),
-    uniqueIndex('contacts_unsubscribe_token_idx').on(t.unsubscribeToken),
+    // Per tenant: one business's imported token can never collide with or reveal another's.
+    uniqueIndex('contacts_tenant_unsubscribe_token_idx').on(t.tenantId, t.unsubscribeToken),
     index('contacts_tenant_external_idx').on(t.tenantId, t.externalId),
   ],
 );
@@ -263,11 +264,15 @@ export const transactionalMessages = sqliteTable('transactional_messages', {
   createdAt: createdAt(),
 });
 
-/** SNS posts refused at /ses/:tenantId (bad signature, unknown topic), kept for investigation. */
+/**
+ * SNS posts refused at /ses/:tenantId (bad signature, unknown topic), kept for investigation. Only
+ * the envelope is stored: the body carries recipient addresses that erasure could not reach.
+ */
 export const webhookQuarantine = sqliteTable('webhook_quarantine', {
   id: text('id').primaryKey(),
   tenantId: text('tenant_id'),
   reason: text('reason').notNull(),
-  body: text('body').notNull(),
+  topicArn: text('topic_arn'),
+  messageId: text('message_id'),
   createdAt: createdAt(),
 });
