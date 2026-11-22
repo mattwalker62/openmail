@@ -28,5 +28,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx wrangler d1 migrations apply DB --remote
+      # Git does not track an empty drizzle/ folder, and wrangler errors when it finds no migrations,
+      # so apply only when Drizzle has generated at least one.
+      - name: Apply D1 migrations
+        run: |
+          if compgen -G "drizzle/*.sql" > /dev/null; then
+            npx wrangler d1 migrations apply DB --remote
+          else
+            echo "No D1 migrations yet; nothing to apply."
+          fi
       - run: npx wrangler deploy
