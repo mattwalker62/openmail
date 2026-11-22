@@ -6,6 +6,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "routes": [{ "pattern": "mail.mattwalker.co", "custom_domain": true }],
+  // Production answers only on mail.mattwalker.co; Previews get workers.dev URLs
+  // (<branch>-openmail.<subdomain>.workers.dev, sent with X-Robots-Tag: noindex).
+  "workers_dev": false,
+  "preview_urls": true,
   "durable_objects": {
     "bindings": [{ "name": "SEND_RATE_LIMITER", "class_name": "SendRateLimiter" }]
   },

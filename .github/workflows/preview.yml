@@ -33,7 +33,7 @@ jobs:
           # Preview names: lowercase letters, digits and dashes, from the branch name (never interpolated raw).
           name=$(printf '%s' "$HEAD_REF" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g' | cut -c1-50)
           npx wrangler preview --name "$name" --json > preview.json
-          url=$(jq -r '.preview_url // .url // empty' preview.json)
+          url=$(jq -r '[.urls[]?] | first // empty' preview.json)
           echo "### Preview: \`$name\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "${url:-see preview.json in the log}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${url:-No Preview URL yet: preview_urls takes effect after the next production deploy.}" >> "$GITHUB_STEP_SUMMARY"
           cat preview.json
