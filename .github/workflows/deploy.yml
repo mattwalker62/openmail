@@ -28,5 +28,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run build:client
       - run: npx wrangler d1 migrations apply DB --remote
       - run: npx wrangler deploy

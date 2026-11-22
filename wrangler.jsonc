@@ -10,6 +10,16 @@
   // (<branch>-openmail.<subdomain>.workers.dev, sent with X-Robots-Tag: noindex).
   "workers_dev": false,
   "preview_urls": true,
+  // The owner dashboard (client/, built by `npm run build:client`). Unknown paths serve the app; server
+  // routes run in the Worker first.
+  "assets": {
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*", "/v1/*", "/admin/*", "/mcp", "/mcp/*", "/oauth/*", "/.well-known/*",
+      "/authorize", "/authorize/*", "/login", "/signup", "/logout", "/u/*", "/ses/*", "/health"
+    ]
+  },
   "durable_objects": {
     "bindings": [{ "name": "SEND_RATE_LIMITER", "class_name": "SendRateLimiter" }]
   },

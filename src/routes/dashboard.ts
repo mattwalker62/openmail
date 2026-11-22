@@ -5,41 +5,34 @@ import { approveCampaign, createPolicy, resendUnknowns, setCampaignStatus, type 
 import { db } from '../db/client';
 import { apiKeys, campaigns, drafts, lists, policies, tenants } from '../db/schema';
 import type { Env } from '../env';
-import { layout } from '../ui/layout';
-import { escapeHtml as h } from '../ui/page';
 import { currentOwner } from './owner';
 
 type C = Context<{ Bindings: Env }>;
-export const dashboard = new Hono<{ Bindings: Env }>();
+
+/**
+ * JSON API for the owner dashboard (the React app in client/). Every route needs a signed-in owner of
+ * that business; every write also needs this site's Origin, on top of the SameSite=Lax session cookie,
+ * so no other page can approve a send on an owner's behalf.
+ */
+export const dashboardApi = new Hono<{ Bindings: Env }>();
 
 const MAX_CONTEXT = 8000;
 
-/**
- * Who may act here. Reads need an owner of the tenant. Writes also need the request to come from
- * this site (Origin header), on top of the session cookie's SameSite=Lax, so no other page can post
- * an approval on an owner's behalf.
- */
-async function ownerOf(c: C, tenantId: string, write = false): Promise<Owner | Response> {
+async function ownerOf(c: C, tenantId: string | null, write = false): Promise<Owner | Response> {
   const owner = await currentOwner(c);
-  if (!owner) {
-    const url = new URL(c.req.url);
-    return c.redirect(`/login?next=${encodeURIComponent(url.pathname)}`, 303);
-  }
-  if (write && c.req.header('origin') !== new URL(c.env.PUBLIC_BASE_URL).origin) return c.text('Forbidden', 403);
-  if (!owner.tenants.some((t) => t.id === tenantId)) return c.text('Forbidden', 403);
+  if (!owner) return c.json({ error: 'unauthorized' }, 401);
+  if (write && c.req.header('origin') !== new URL(c.env.PUBLIC_BASE_URL).origin) return c.json({ error: 'forbidden' }, 403);
+  if (tenantId !== null && !owner.tenants.some((t) => t.id === tenantId)) return c.json({ error: 'forbidden' }, 403);
   return owner;
 }
 
-dashboard.get('/', async (c) => {
-  const owner = await currentOwner(c);
-  if (!owner) return c.redirect('/login', 303);
-  const first = owner.tenants[0];
-  return first ? c.redirect(`/t/${first.id}`, 303) : c.html(layout(owner, '', '', 'No business', '<h1>No business yet</h1>'));
+dashboardApi.get('/me', async (c) => {
+  const owner = await ownerOf(c, null);
+  if (owner instanceof Response) return owner;
+  return c.json({ email: owner.email, tenants: owner.tenants });
 });
 
-// ── Overview ─────────────────────────────────────────────────────────────────
-
-dashboard.get('/t/:tenantId', async (c) => {
+dashboardApi.get('/t/:tenantId/overview', async (c) => {
   const tenantId = c.req.param('tenantId');
   const owner = await ownerOf(c, tenantId);
   if (owner instanceof Response) return owner;
@@ -48,44 +41,38 @@ dashboard.get('/t/:tenantId', async (c) => {
        (select count(*) from campaign_recipients r where r.campaign_id = c.id and r.status = 'sent') as sent,
        (select count(*) from campaign_recipients r where r.campaign_id = c.id and r.status = 'unknown') as unknown
      from campaigns c join drafts d on d.id = c.draft_id join lists l on l.id = c.list_id
-     where c.tenant_id = ? order by c.created_at desc limit 30`,
+     where c.tenant_id = ? order by c.created_at desc limit 50`,
   )
     .bind(tenantId)
-    .all<{ id: string; status: string; pause_reason: string | null; origin: string; recipient_count: number | null; subject: string; list: string; sent: number; unknown: number }>();
-
-  const waiting = rows.results.filter((r) => r.status === 'awaiting_approval' || (r.status === 'paused' && r.pause_reason !== 'owner'));
-  const control = (id: string, action: string, label: string) =>
-    `<form class="inline" method="post" action="/t/${h(tenantId)}/campaigns/${h(id)}/${action}"><button class="ghost" type="submit">${label}</button></form>`;
-  const waitingHtml = waiting.length
-    ? waiting
-        .map((r) => `<tr><td>${h(r.subject)}</td><td>${h(r.list)}</td><td>${r.origin === 'mcp' ? 'agent' : 'app'}</td><td><a href="/approve/${h(r.id)}">Review and approve</a></td></tr>`)
-        .join('')
-    : '<tr><td class="muted">Nothing is waiting for you.</td></tr>';
-  const campaignsHtml = rows.results
-    .map((r) => {
-      const actions = [
-        r.status === 'approved' || r.status === 'sending' ? control(r.id, 'pause', 'Pause') : '',
-        r.status === 'paused' && r.pause_reason === 'owner' ? control(r.id, 'resume', 'Resume') : '',
-        r.unknown > 0 ? control(r.id, 'resend-unknowns', `Resend ${r.unknown} unknown`) : '',
-        r.status !== 'sent' && r.status !== 'cancelled' ? control(r.id, 'cancel', 'Cancel') : '',
-      ].join(' ');
-      const status = r.pause_reason ? `${r.status} (${r.pause_reason.replace('_', ' ')})` : r.status;
-      return `<tr><td>${h(r.subject)}</td><td>${h(r.list)}</td><td><span class="pill">${h(status)}</span></td><td>${r.sent}/${r.recipient_count ?? '–'}</td><td>${actions}</td></tr>`;
-    })
-    .join('');
-  return c.html(
-    layout(
-      owner,
-      tenantId,
-      '',
-      'Overview',
-      `<h1>Overview</h1><div class="card"><h2>Waiting for your approval</h2><table>${waitingHtml}</table></div>` +
-        `<div class="card"><h2>Campaigns</h2><table><tr><th>Subject</th><th>List</th><th>Status</th><th>Sent</th><th></th></tr>${campaignsHtml}</table></div>`,
-    ),
-  );
+    .all<{
+      id: string;
+      status: string;
+      pause_reason: string | null;
+      origin: string;
+      recipient_count: number | null;
+      created_at: number;
+      subject: string;
+      list: string;
+      sent: number;
+      unknown: number;
+    }>();
+  const campaignsOut = rows.results.map((r) => ({
+    id: r.id,
+    subject: r.subject,
+    list: r.list,
+    status: r.status,
+    pauseReason: r.pause_reason,
+    requestedBy: r.origin === 'mcp' ? 'agent' : 'app',
+    recipients: r.recipient_count,
+    sent: r.sent,
+    unknown: r.unknown,
+    createdAt: r.created_at,
+  }));
+  const waiting = campaignsOut.filter((r) => r.status === 'awaiting_approval' || (r.status === 'paused' && r.pauseReason !== 'owner'));
+  return c.json({ waiting, campaigns: campaignsOut });
 });
 
-// ── The approval page (D12): GET shows the exact intent; only a POST approves ─
+// ── Approval (D12): GET describes the exact intent; only a POST approves ─────
 
 async function campaignFor(c: C, campaignId: string) {
   return db(c.env.DB)
@@ -111,9 +98,9 @@ async function campaignFor(c: C, campaignId: string) {
     .get();
 }
 
-dashboard.get('/approve/:campaignId', async (c) => {
+dashboardApi.get('/approve/:campaignId', async (c) => {
   const camp = await campaignFor(c, c.req.param('campaignId'));
-  if (!camp) return c.text('Not found', 404);
+  if (!camp) return c.json({ error: 'not_found' }, 404);
   const owner = await ownerOf(c, camp.tenantId);
   if (owner instanceof Response) return owner;
   const count = await c.env.DB.prepare(
@@ -124,133 +111,108 @@ dashboard.get('/approve/:campaignId', async (c) => {
     .first<{ n: number }>();
   const awaiting = camp.status === 'awaiting_approval' || (camp.status === 'paused' && camp.pauseReason !== 'owner');
   const stale = camp.currentVersion !== camp.draftVersion;
-  const action = !awaiting
-    ? `<p>This send is <span class="pill">${h(camp.status)}</span>; there is nothing to approve.</p>`
-    : stale
-      ? '<p class="muted">The draft changed after this request. Ask for a new approval.</p>'
-      : `<form method="post"><button type="submit">Approve and send</button></form>`;
-  return c.html(
-    layout(
-      owner,
-      camp.tenantId,
-      '',
-      'Approve send',
-      `<h1>Approve this send?</h1><div class="card"><table>` +
-        `<tr><th>Subject</th><td>${h(camp.subject)} <span class="muted">(draft version ${camp.draftVersion})</span></td></tr>` +
-        `<tr><th>To</th><td>${h(camp.listName)}: ${count?.n ?? 0} recipients</td></tr>` +
-        `<tr><th>From</th><td>${h(camp.fromAddress)}</td></tr>` +
-        `<tr><th>When</th><td>${h(camp.scheduledAt.toISOString())}</td></tr>` +
-        `<tr><th>Requested by</th><td>${camp.origin === 'mcp' ? 'an agent' : 'an app'}${camp.pauseReason ? ` (paused: ${h(camp.pauseReason.replace('_', ' '))})` : ''}</td></tr>` +
-        `</table></div><div class="card"><iframe sandbox title="Email preview" srcdoc="${h(camp.html)}" style="width:100%;height:24rem;border:0"></iframe></div>${action}`,
-    ),
-  );
+  return c.json({
+    id: camp.id,
+    tenantId: camp.tenantId,
+    status: camp.status,
+    pauseReason: camp.pauseReason,
+    subject: camp.subject,
+    html: camp.html,
+    draftVersion: camp.draftVersion,
+    draftChanged: stale,
+    list: camp.listName,
+    recipients: count?.n ?? 0,
+    fromAddress: camp.fromAddress,
+    scheduledAt: camp.scheduledAt.getTime(),
+    requestedBy: camp.origin === 'mcp' ? 'agent' : 'app',
+    canApprove: awaiting && !stale,
+  });
 });
 
-dashboard.post('/approve/:campaignId', async (c) => {
+dashboardApi.post('/approve/:campaignId', async (c) => {
   const camp = await campaignFor(c, c.req.param('campaignId'));
-  if (!camp) return c.text('Not found', 404);
+  if (!camp) return c.json({ error: 'not_found' }, 404);
   const owner = await ownerOf(c, camp.tenantId, true);
   if (owner instanceof Response) return owner;
   const result = await approveCampaign(db(c.env.DB), camp.id, owner.userId);
-  if (!result.ok) {
-    return c.html(layout(owner, camp.tenantId, '', 'Not approved', `<h1>Could not approve</h1><p>${h(result.reason.replace('_', ' '))}.</p>`), 409);
-  }
-  return c.redirect(`/t/${camp.tenantId}`, 303);
+  return result.ok ? c.json(result) : c.json(result, 409);
 });
 
 // ── Campaign controls ────────────────────────────────────────────────────────
 
 for (const action of ['pause', 'resume', 'cancel'] as StatusAction[]) {
-  dashboard.post(`/t/:tenantId/campaigns/:id/${action}`, async (c) => {
+  dashboardApi.post(`/t/:tenantId/campaigns/:id/${action}`, async (c) => {
     const tenantId = c.req.param('tenantId');
     const owner = await ownerOf(c, tenantId, true);
     if (owner instanceof Response) return owner;
-    await setCampaignStatus(db(c.env.DB), tenantId, c.req.param('id'), action);
-    return c.redirect(`/t/${tenantId}`, 303);
+    const result = await setCampaignStatus(db(c.env.DB), tenantId, c.req.param('id'), action);
+    return c.json(result, result.ok ? 200 : 409);
   });
 }
 
-dashboard.post('/t/:tenantId/campaigns/:id/resend-unknowns', async (c) => {
+dashboardApi.post('/t/:tenantId/campaigns/:id/resend-unknowns', async (c) => {
   const tenantId = c.req.param('tenantId');
   const owner = await ownerOf(c, tenantId, true);
   if (owner instanceof Response) return owner;
-  await resendUnknowns(db(c.env.DB), tenantId, c.req.param('id'));
-  return c.redirect(`/t/${tenantId}`, 303);
+  const result = await resendUnknowns(db(c.env.DB), tenantId, c.req.param('id'));
+  return c.json(result, result.ok ? 200 : 409);
 });
 
 // ── Suppressions, agent setup, context ───────────────────────────────────────
 
-dashboard.get('/t/:tenantId/suppressions', async (c) => {
+dashboardApi.get('/t/:tenantId/suppressions', async (c) => {
   const tenantId = c.req.param('tenantId');
   const owner = await ownerOf(c, tenantId);
   if (owner instanceof Response) return owner;
   const rows = await c.env.DB.prepare('select kind, count(*) as n from suppressions where tenant_id = ? group by kind order by kind')
     .bind(tenantId)
     .all<{ kind: string; n: number }>();
-  const table = rows.results.map((r) => `<tr><td>${h(r.kind)}</td><td>${r.n}</td></tr>`).join('') || '<tr><td class="muted">None yet.</td></tr>';
-  return c.html(
-    layout(owner, tenantId, '/suppressions', 'Suppressions', `<h1>Suppressions</h1><p class="muted">Addresses are stored only as hashes, so this page shows counts.</p><div class="card"><table>${table}</table></div>`),
-  );
+  return c.json({ counts: rows.results.map((r) => ({ kind: r.kind, count: r.n })) });
 });
 
-dashboard.get('/t/:tenantId/agent', async (c) => {
-  const tenantId = c.req.param('tenantId');
-  const owner = await ownerOf(c, tenantId);
+dashboardApi.get('/t/:tenantId/agent', async (c) => {
+  const owner = await ownerOf(c, c.req.param('tenantId'));
   if (owner instanceof Response) return owner;
-  const url = `${c.env.PUBLIC_BASE_URL}/mcp`;
-  return c.html(
-    layout(
-      owner,
-      tenantId,
-      '/agent',
-      'Agent setup',
-      `<h1>Agent setup</h1><div class="card"><p>Add openmail to your agent as a remote MCP server. It signs in with your owner account, and you pick this business when it asks.</p>` +
-        `<label>MCP server URL</label><pre>${h(url)}</pre>` +
-        `<h3>Claude</h3><p>Settings → Connectors → Add custom connector → paste the URL.</p>` +
-        `<h3>ChatGPT</h3><p>Settings → Connectors → Create → paste the URL, authentication OAuth.</p>` +
-        `<h3>Claude Code</h3><pre>claude mcp add --transport http openmail ${h(url)}</pre>` +
-        `<p class="muted">Agents can draft and ask you to approve. Only you can approve a send, here.</p></div>`,
-    ),
-  );
+  return c.json({ mcpUrl: `${c.env.PUBLIC_BASE_URL}/mcp` });
 });
 
-dashboard.get('/t/:tenantId/context', async (c) => {
+dashboardApi.get('/t/:tenantId/context', async (c) => {
   const tenantId = c.req.param('tenantId');
   const owner = await ownerOf(c, tenantId);
   if (owner instanceof Response) return owner;
   const t = await db(c.env.DB).select({ context: tenants.context }).from(tenants).where(eq(tenants.id, tenantId)).get();
-  return c.html(
-    layout(
-      owner,
-      tenantId,
-      '/context',
-      'Context',
-      `<h1>Context</h1><p class="muted">Agents read this before drafting: your voice, sign-off, things to avoid.</p>` +
-        `<form method="post"><textarea name="context" rows="14" maxlength="${MAX_CONTEXT}">${h(t?.context ?? '')}</textarea><button type="submit">Save</button></form>`,
-    ),
-  );
+  return c.json({ context: t?.context ?? '' });
 });
 
-dashboard.post('/t/:tenantId/context', async (c) => {
+dashboardApi.put('/t/:tenantId/context', async (c) => {
   const tenantId = c.req.param('tenantId');
   const owner = await ownerOf(c, tenantId, true);
   if (owner instanceof Response) return owner;
-  const context = String((await c.req.parseBody()).context ?? '');
-  if (context.length > MAX_CONTEXT) return c.text(`Context is limited to ${MAX_CONTEXT} characters.`, 400);
+  const b = (await c.req.json().catch(() => ({}))) as { context?: unknown };
+  const context = typeof b.context === 'string' ? b.context : '';
+  if (context.length > MAX_CONTEXT) return c.json({ error: `Context is limited to ${MAX_CONTEXT} characters.` }, 400);
   await db(c.env.DB).update(tenants).set({ context }).where(eq(tenants.id, tenantId));
-  return c.redirect(`/t/${tenantId}/context`, 303);
+  return c.json({ context });
 });
 
 // ── Standing approvals (D15) ─────────────────────────────────────────────────
 
-dashboard.get('/t/:tenantId/policies', async (c) => {
+dashboardApi.get('/t/:tenantId/policies', async (c) => {
   const tenantId = c.req.param('tenantId');
   const owner = await ownerOf(c, tenantId);
   if (owner instanceof Response) return owner;
   const d = db(c.env.DB);
   const [rows, keys] = await Promise.all([
     d
-      .select({ id: policies.id, type: policies.campaignType, list: lists.name, from: policies.fromAddress, max: policies.maxPerDay, key: apiKeys.name, revokedAt: policies.revokedAt })
+      .select({
+        id: policies.id,
+        campaignType: policies.campaignType,
+        list: lists.name,
+        fromAddress: policies.fromAddress,
+        maxPerDay: policies.maxPerDay,
+        keyName: apiKeys.name,
+        revokedAt: policies.revokedAt,
+      })
       .from(policies)
       .innerJoin(lists, eq(lists.id, policies.listId))
       .innerJoin(apiKeys, eq(apiKeys.id, policies.apiKeyId))
@@ -259,53 +221,41 @@ dashboard.get('/t/:tenantId/policies', async (c) => {
       .all(),
     d.select({ id: apiKeys.id, name: apiKeys.name }).from(apiKeys).where(and(eq(apiKeys.tenantId, tenantId), isNull(apiKeys.revokedAt))).all(),
   ]);
-  const table = rows
-    .map(
-      (p) =>
-        `<tr><td>${h(p.type)}</td><td>${h(p.list)}</td><td>${h(p.from)}</td><td>${p.max}/day</td><td>${h(p.key)}</td><td>${
-          p.revokedAt ? '<span class="pill">revoked</span>' : `<form class="inline" method="post" action="/t/${h(tenantId)}/policies/${h(p.id)}/revoke"><button class="ghost" type="submit">Revoke</button></form>`
-        }</td></tr>`,
-    )
-    .join('');
-  const keyOptions = keys.map((k) => `<option value="${h(k.id)}">${h(k.name)}</option>`).join('');
-  return c.html(
-    layout(
-      owner,
-      tenantId,
-      '/policies',
-      'Standing approvals',
-      `<h1>Standing approvals</h1><p class="muted">Let one app key send one kind of campaign to one list without asking each time. The first send still needs your approval, and a send pauses if the list changed by more than 10% since the last one.</p>` +
-        `<div class="card"><table><tr><th>Type</th><th>List</th><th>From</th><th>Cap</th><th>App key</th><th></th></tr>${table}</table></div>` +
-        `<div class="card"><h2>New standing approval</h2><form method="post"><label>App key<select name="apiKeyId">${keyOptions}</select></label>` +
-        `<label>Campaign type<input name="campaignType" required placeholder="daily"></label><label>List<input name="list" required></label>` +
-        `<label>From address<input name="fromAddress" required></label><label>Sends per day<input name="maxPerDay" type="number" min="1" max="24" value="1"></label>` +
-        `<button type="submit">Create</button></form></div>`,
-    ),
-  );
+  return c.json({
+    policies: rows.map(({ revokedAt, ...p }) => ({ ...p, revoked: revokedAt !== null })),
+    keys,
+  });
 });
 
-dashboard.post('/t/:tenantId/policies', async (c) => {
+dashboardApi.post('/t/:tenantId/policies', async (c) => {
   const tenantId = c.req.param('tenantId');
   const owner = await ownerOf(c, tenantId, true);
   if (owner instanceof Response) return owner;
-  const f = await c.req.parseBody();
-  const apiKeyId = String(f.apiKeyId ?? '');
-  const key = await db(c.env.DB).select({ id: apiKeys.id }).from(apiKeys).where(and(eq(apiKeys.id, apiKeyId), eq(apiKeys.tenantId, tenantId))).get();
-  const maxPerDay = Number(f.maxPerDay ?? 1);
-  if (!key || !f.campaignType || !f.list || !f.fromAddress || !Number.isInteger(maxPerDay) || maxPerDay < 1 || maxPerDay > 24) {
-    return c.text('Invalid standing approval.', 400);
+  const b = (await c.req.json().catch(() => ({}))) as {
+    apiKeyId?: string;
+    campaignType?: string;
+    list?: string;
+    fromAddress?: string;
+    maxPerDay?: number;
+  };
+  const key = b.apiKeyId
+    ? await db(c.env.DB).select({ id: apiKeys.id }).from(apiKeys).where(and(eq(apiKeys.id, b.apiKeyId), eq(apiKeys.tenantId, tenantId))).get()
+    : undefined;
+  const maxPerDay = Number(b.maxPerDay ?? 1);
+  if (!key || !b.campaignType || !b.list || !b.fromAddress || !Number.isInteger(maxPerDay) || maxPerDay < 1 || maxPerDay > 24) {
+    return c.json({ error: 'invalid_policy' }, 400);
   }
-  await createPolicy(db(c.env.DB), tenantId, {
-    apiKeyId,
-    campaignType: String(f.campaignType),
-    list: String(f.list),
-    fromAddress: String(f.fromAddress),
+  const created = await createPolicy(db(c.env.DB), tenantId, {
+    apiKeyId: key.id,
+    campaignType: b.campaignType,
+    list: b.list,
+    fromAddress: b.fromAddress,
     maxPerDay,
   });
-  return c.redirect(`/t/${tenantId}/policies`, 303);
+  return c.json(created, 201);
 });
 
-dashboard.post('/t/:tenantId/policies/:id/revoke', async (c) => {
+dashboardApi.post('/t/:tenantId/policies/:id/revoke', async (c) => {
   const tenantId = c.req.param('tenantId');
   const owner = await ownerOf(c, tenantId, true);
   if (owner instanceof Response) return owner;
@@ -313,5 +263,5 @@ dashboard.post('/t/:tenantId/policies/:id/revoke', async (c) => {
     .update(policies)
     .set({ revokedAt: new Date() })
     .where(and(eq(policies.id, c.req.param('id')), eq(policies.tenantId, tenantId)));
-  return c.redirect(`/t/${tenantId}/policies`, 303);
+  return c.json({ ok: true });
 });
