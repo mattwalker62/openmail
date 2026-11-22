@@ -20,25 +20,37 @@ const escapeHtml = (v: string) =>
   v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 const MAX_TEXT = 200;
+const MAX_URL = 2000;
+const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+// Anything a mail client could turn into a link: a path, a backslash, or a dotted hostname.
+const LINK_SHAPED = /[\/\\]|[a-z0-9-]+\.[a-z]{2,}/i;
+const WHITESPACE_OR_CONTROL = /[\s\x00-\x1f\x7f]/;
 
 /**
- * Check one caller-supplied value. A URL must be https on one of the template's allowed origins, so a
- * leaked API key can't put someone else's link in a login email from this domain. Anything else is
- * short plain text with no URL in it.
+ * Check one caller-supplied value with positive rules, so a leaked API key can't put someone else's
+ * link in a login email from this domain:
+ * - a URL must be absolute https on one of the template's allowed origins, contain no whitespace or
+ *   control characters, stay under 2,000 characters, and round-trip exactly through the URL parser;
+ * - anything else is short plain text with nothing link-shaped in it.
  */
 function checkValue(key: string, value: string, linkOrigins: string[]): void {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) {
-    let origin: string;
+  if (SCHEME.test(value)) {
+    if (value.length > MAX_URL) throw new Error(`value too long: ${key}`);
+    if (WHITESPACE_OR_CONTROL.test(value)) throw new Error(`bad link: ${key}`);
+    let url: URL;
     try {
-      origin = new URL(value).origin;
+      url = new URL(value);
     } catch {
       throw new Error(`bad link: ${key}`);
     }
-    if (!value.startsWith('https://') || !linkOrigins.includes(origin)) throw new Error(`link origin not allowed: ${key}`);
+    if (url.href !== value) throw new Error(`bad link: ${key}`);
+    if (url.protocol !== 'https:' || !linkOrigins.includes(url.origin)) throw new Error(`link origin not allowed: ${key}`);
     return;
   }
   if (value.length > MAX_TEXT) throw new Error(`value too long: ${key}`);
-  if (/:\/\/|www\./i.test(value)) throw new Error(`link not allowed in text: ${key}`);
+  if (LINK_SHAPED.test(value) || WHITESPACE_OR_CONTROL.test(value.replace(/ /g, ''))) {
+    throw new Error(`link not allowed in text: ${key}`);
+  }
 }
 
 /** Fill `{{name}}` placeholders. Values are HTML-escaped in the html body; a missing value is an error. */

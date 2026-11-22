@@ -12,9 +12,9 @@ const template = {
 
 describe('renderTemplate', () => {
   it('fills placeholders, HTML-escaping values in the html body only', () => {
-    const out = renderTemplate(template, { site: 'Beacon', url: 'https://x.test/l?a=1&b=2', name: '<b>Al</b>' });
+    const out = renderTemplate(template, { site: 'Beacon', url: 'https://x.test/l?a=1&b=2', name: 'Al <& Co>' });
     expect(out.subject).toBe('Sign in to Beacon');
-    expect(out.html).toBe('<a href="https://x.test/l?a=1&amp;b=2">Sign in</a> &lt;b&gt;Al&lt;/b&gt;');
+    expect(out.html).toBe('<a href="https://x.test/l?a=1&amp;b=2">Sign in</a> Al &lt;&amp; Co&gt;');
     expect(out.text).toBe('Sign in: https://x.test/l?a=1&b=2');
   });
 
@@ -24,6 +24,24 @@ describe('renderTemplate', () => {
 
   it("refuses a link outside the template's allowed origins, so a leaked key can't send someone else's link", () => {
     expect(() => renderTemplate(template, { site: 'B', url: 'https://evil.example/l', name: 'Al' })).toThrow(/link origin not allowed/);
+  });
+
+  it.each([
+    ['protocol-relative link', '//evil.example/login'],
+    ['backslash link', '\\\\evil.example\\login'],
+    ['bare domain', 'evil.example/login'],
+    ['bare domain without path', 'evil.example'],
+  ])('refuses a text value that is a %s', (_, value) => {
+    expect(() => renderTemplate(template, { site: value, url: 'https://x.test/l', name: 'Al' })).toThrow(/not allowed in text/);
+  });
+
+  it.each([
+    ['whitespace', 'https://x.test/l ok'],
+    ['a control character', 'https://x.test/l\u0007'],
+    ['a value that does not round-trip', 'https://X.TEST/l'],
+    ['an over-long URL', 'https://x.test/' + 'a'.repeat(2000)],
+  ])('refuses a link with %s', (_, url) => {
+    expect(() => renderTemplate(template, { site: 'B', url, name: 'Al' })).toThrow(/bad link|link origin not allowed|too long/);
   });
 
   it('refuses a plain-text value that smuggles a URL or runs long', () => {
@@ -116,7 +134,7 @@ describe('POST /v1/messages', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('{"MessageId":"m-2"}', { status: 200 }));
     await api(t.apiKey, '/v1/suppressions', { method: 'POST', body: JSON.stringify({ email: 'u@example.com', kind: 'unsubscribe' }) });
 
-    const res = await api(t.apiKey, '/v1/messages', { method: 'POST', body: JSON.stringify({ to: 'u@example.com', template: 'login', data: { site: 'B', url: 'https://b.test', name: 'U' } }) });
+    const res = await api(t.apiKey, '/v1/messages', { method: 'POST', body: JSON.stringify({ to: 'u@example.com', template: 'login', data: { site: 'B', url: 'https://b.test/l', name: 'U' } }) });
     expect(res.status).toBe(202);
   });
 
@@ -124,7 +142,7 @@ describe('POST /v1/messages', () => {
     const t = await tenantWithTemplate();
     await api(t.apiKey, '/v1/suppressions', { method: 'POST', body: JSON.stringify({ email: 'b@example.com', kind: 'hard_bounce' }) });
 
-    const blocked = await api(t.apiKey, '/v1/messages', { method: 'POST', body: JSON.stringify({ to: 'b@example.com', template: 'login', data: { site: 'B', url: 'https://b.test', name: 'B' } }) });
+    const blocked = await api(t.apiKey, '/v1/messages', { method: 'POST', body: JSON.stringify({ to: 'b@example.com', template: 'login', data: { site: 'B', url: 'https://b.test/l', name: 'B' } }) });
     expect(blocked.status).toBe(409);
     const unknown = await api(t.apiKey, '/v1/messages', { method: 'POST', body: JSON.stringify({ to: 'a@example.com', template: 'nope', data: {} }) });
     expect(unknown.status).toBe(404);
