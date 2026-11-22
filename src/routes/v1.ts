@@ -3,14 +3,21 @@ import { Hono } from 'hono';
 import { createKeyAuthenticator } from '../auth/api-keys';
 import { createDraft, requestCampaign, setCampaignStatus, updateDraft } from '../campaigns/service';
 import { db } from '../db/client';
-<<<<<<< HEAD
-import { apiKeys, campaignRecipients, campaigns, contacts, listMembers, lists, suppressions } from '../db/schema';
-=======
-import { apiKeys, campaigns, contacts, listMembers, lists, suppressions, templates, tenants, transactionalMessages } from '../db/schema';
+import {
+  apiKeys,
+  campaignRecipients,
+  campaigns,
+  contacts,
+  listMembers,
+  lists,
+  suppressions,
+  templates,
+  tenants,
+  transactionalMessages,
+} from '../db/schema';
 import { renderTemplate, sendTransactional } from '../transactional/send';
 import { resolveLane } from '../transport/lanes';
 import { sendViaSes } from '../transport/ses';
->>>>>>> 5d7ab03 (Transactional mail: owner templates on the transactional lane, fail-open suppression)
 import type { Env } from '../env';
 import { addressHash, isValidEmail, normalizeEmail, randomToken } from '../lib/address';
 
