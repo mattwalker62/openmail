@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "openmail",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "openmail",
+      "database_id": "1dea8083-556e-46a2-9a16-59a877f8a9f7",
+      "migrations_dir": "drizzle"
+    }
+  ]
+}
