@@ -65,6 +65,9 @@ export interface SendEmailBody {
 
 const utf8 = (Data: string): Content => ({ Data, Charset: 'UTF-8' });
 
+/** AWS region names only (e.g. eu-west-1, us-gov-west-1); the region becomes part of the SES hostname. */
+export const AWS_REGION = /^[a-z]{2}(-gov)?-[a-z]+-\d$/;
+
 export function laneFor(lanes: TenantLanes, kind: LaneKind): SesLane {
   return lanes[kind];
 }
@@ -141,6 +144,9 @@ export function classifySesError(status: number, body: string, errorType?: strin
 }
 
 export async function sendViaSes(lane: SesLane, email: OutboundEmail): Promise<SendResult> {
+  if (!AWS_REGION.test(lane.region)) {
+    return { ok: false, status: 0, error: `invalid SES region: ${lane.region}`, ...FATAL };
+  }
   const aws = new AwsClient({
     accessKeyId: lane.accessKeyId,
     secretAccessKey: lane.secretAccessKey,

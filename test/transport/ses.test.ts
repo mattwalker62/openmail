@@ -150,6 +150,15 @@ describe('sendViaSes', () => {
     });
   });
 
+  it('refuses a lane whose region is not an AWS region name, without sending anything', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const result = await sendViaSes({ ...bulk, region: 'evil.example.com/x?' }, email);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, type: 'fatal', shouldRetry: false });
+  });
+
   it('treats a network failure as retryable', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('network down'));
 
