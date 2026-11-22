@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { db } from '../db/client';
-import { apiKeys, templates, tenants } from '../db/schema';
+import { apiKeys, memberships, ownerInvites, templates, tenants, users } from '../db/schema';
+import { normalizeEmail, isValidEmail } from '../lib/address';
 import { eq } from 'drizzle-orm';
 import type { Env } from '../env';
 import { generateApiKey, hashApiKey } from '../auth/api-keys';
@@ -92,4 +93,21 @@ admin.put('/tenants/:slug/sns-topics', async (c) => {
   const d = db(c.env.DB);
   const updated = await d.update(tenants).set({ snsTopicArns: JSON.stringify(arns) }).where(eq(tenants.slug, c.req.param('slug'))).returning({ id: tenants.id });
   return updated.length ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404);
+});
+
+/** Invite an owner. If they already have an account they become an owner now; otherwise on sign-up. */
+admin.post('/tenants/:slug/owners', async (c) => {
+  const b = (await c.req.json().catch(() => null)) as { email?: string } | null;
+  const email = normalizeEmail(b?.email ?? '');
+  if (!isValidEmail(email)) return c.json({ error: 'invalid_email' }, 400);
+  const d = db(c.env.DB);
+  const tenant = await d.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, c.req.param('slug'))).get();
+  if (!tenant) return c.json({ error: 'not_found' }, 404);
+  const user = await d.select({ id: users.id }).from(users).where(eq(users.email, email)).get();
+  if (user) {
+    await d.insert(memberships).values({ tenantId: tenant.id, userId: user.id, role: 'owner' }).onConflictDoNothing();
+  } else {
+    await d.insert(ownerInvites).values({ tenantId: tenant.id, email }).onConflictDoNothing();
+  }
+  return c.json({ ok: true, invited: !user }, 201);
 });

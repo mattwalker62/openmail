@@ -276,3 +276,86 @@ export const webhookQuarantine = sqliteTable('webhook_quarantine', {
   messageId: text('message_id'),
   createdAt: createdAt(),
 });
+
+// ── Owners (Better Auth core tables) ─────────────────────────────────────────
+
+const ts = (name: string) => integer(name, { mode: 'timestamp_ms' });
+
+export const users = sqliteTable('user', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  email: text('email').notNull().unique(),
+  emailVerified: integer('email_verified', { mode: 'boolean' }).notNull().default(false),
+  image: text('image'),
+  createdAt: ts('created_at').notNull(),
+  updatedAt: ts('updated_at').notNull(),
+});
+
+export const sessions = sqliteTable('session', {
+  id: text('id').primaryKey(),
+  expiresAt: ts('expires_at').notNull(),
+  token: text('token').notNull().unique(),
+  createdAt: ts('created_at').notNull(),
+  updatedAt: ts('updated_at').notNull(),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  userId: text('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+});
+
+export const accounts = sqliteTable('account', {
+  id: text('id').primaryKey(),
+  accountId: text('account_id').notNull(),
+  providerId: text('provider_id').notNull(),
+  userId: text('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  accessToken: text('access_token'),
+  refreshToken: text('refresh_token'),
+  idToken: text('id_token'),
+  accessTokenExpiresAt: ts('access_token_expires_at'),
+  refreshTokenExpiresAt: ts('refresh_token_expires_at'),
+  scope: text('scope'),
+  password: text('password'),
+  createdAt: ts('created_at').notNull(),
+  updatedAt: ts('updated_at').notNull(),
+});
+
+export const verifications = sqliteTable('verification', {
+  id: text('id').primaryKey(),
+  identifier: text('identifier').notNull(),
+  value: text('value').notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  createdAt: ts('created_at'),
+  updatedAt: ts('updated_at'),
+});
+
+/** Who owns which tenant. Only owners approve sends, manage policies and keys, or connect agents. */
+export const memberships = sqliteTable(
+  'memberships',
+  {
+    tenantId: text('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role', { enum: ['owner'] }).notNull().default('owner'),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.tenantId, t.userId] })],
+);
+
+/** Sign-up is closed: an account can only be created for an email an admin invited to a tenant. */
+export const ownerInvites = sqliteTable(
+  'owner_invites',
+  {
+    tenantId: text('tenant_id')
+      .notNull()
+      .references(() => tenants.id),
+    email: text('email').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.tenantId, t.email] })],
+);

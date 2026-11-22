@@ -11,6 +11,7 @@ export default defineConfig({
           TEST_MIGRATIONS: await readD1Migrations(path.join(import.meta.dirname, 'drizzle')),
           ADMIN_API_TOKEN: 'test-admin-token',
           PUBLIC_BASE_URL: 'https://openmail.test',
+          BETTER_AUTH_SECRET: 'test-better-auth-secret-at-least-32-chars',
           // Lane credentials for tenants created with secretPrefix SES_TEST (fake; SES is mocked).
           SES_TEST_TX_ACCESS_KEY_ID: 'AKIDTX',
           SES_TEST_TX_SECRET_ACCESS_KEY: 'test-secret',
