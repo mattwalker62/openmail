@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from './env';
+import { admin } from './routes/admin';
+import { v1 } from './routes/v1';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -8,6 +10,9 @@ app.get('/health', async (c) => {
   await c.env.DB.prepare('select 1').first();
   return c.json({ ok: true, db: 'ok' });
 });
+
+app.route('/admin', admin);
+app.route('/v1', v1);
 
 app.notFound((c) => c.json({ error: 'not_found' }, 404));
 
