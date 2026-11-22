@@ -6,7 +6,10 @@ import { AppShell, useMe } from '@/components/app-shell';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Toaster } from '@/components/ui/sonner';
 import { ApprovePage } from '@/pages/approve';
-import { OverviewPage } from '@/pages/overview';
+import { LoginPage, SignupPage } from '@/pages/auth';
+import { ContactsPage } from '@/pages/contacts';
+import { EmailsPage } from '@/pages/emails';
+import { HomePage } from '@/pages/home';
 import { AgentPage, ContextPage, PoliciesPage, SuppressionsPage } from '@/pages/settings';
 import './app.css';
 
@@ -22,15 +25,19 @@ const root = createRootRoute({ component: () => <Outlet /> });
 const shell = createRoute({ getParentRoute: () => root, id: 'shell', component: AppShell });
 const home = createRoute({ getParentRoute: () => shell, path: '/', component: Home });
 const tenant = createRoute({ getParentRoute: () => shell, path: '/t/$tenantId' });
-const overview = createRoute({ getParentRoute: () => tenant, path: '/', component: OverviewPage });
+const overview = createRoute({ getParentRoute: () => tenant, path: '/', component: HomePage });
+const emails = createRoute({ getParentRoute: () => tenant, path: '/emails', component: EmailsPage });
+const contacts = createRoute({ getParentRoute: () => tenant, path: '/contacts', component: ContactsPage });
 const suppressions = createRoute({ getParentRoute: () => tenant, path: '/suppressions', component: SuppressionsPage });
-const policies = createRoute({ getParentRoute: () => tenant, path: '/policies', component: PoliciesPage });
+const policies = createRoute({ getParentRoute: () => tenant, path: '/automations', component: PoliciesPage });
 const context = createRoute({ getParentRoute: () => tenant, path: '/context', component: ContextPage });
 const agent = createRoute({ getParentRoute: () => tenant, path: '/agent', component: AgentPage });
+const login = createRoute({ getParentRoute: () => root, path: '/login', component: LoginPage });
+const signup = createRoute({ getParentRoute: () => root, path: '/signup', component: SignupPage });
 const approve = createRoute({ getParentRoute: () => shell, path: '/approve/$campaignId', component: ApprovePage });
 
 const router = createRouter({
-  routeTree: root.addChildren([shell.addChildren([home, tenant.addChildren([overview, suppressions, policies, context, agent]), approve])]),
+  routeTree: root.addChildren([login, signup, shell.addChildren([home, tenant.addChildren([overview, emails, contacts, suppressions, policies, context, agent]), approve])]),
 });
 
 declare module '@tanstack/react-router' {

@@ -127,7 +127,7 @@ export function ContextPage() {
   });
   return (
     <>
-      <PageHeader title="Context" description="Agents read this before drafting: your voice, how you sign off, what to avoid." />
+      <PageHeader title="Voice notes" description="Agents read this before drafting: your voice, how you sign off, what to avoid." />
       <Card>
         <CardContent className="space-y-3">
           <Textarea rows={14} value={text} maxLength={MAX_CONTEXT} onChange={(e) => setText(e.target.value)} />
@@ -180,7 +180,7 @@ export function PoliciesPage() {
   return (
     <>
       <PageHeader
-        title="Standing approvals"
+        title="Automations"
         description="Let one app key send one kind of campaign to one list without asking each time. The first send still needs you, and a send pauses if the list changed by more than 10%."
       />
       <Card className="mb-6">

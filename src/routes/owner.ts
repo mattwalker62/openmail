@@ -5,7 +5,6 @@ import { db } from '../db/client';
 import { memberships, ownerInvites, tenants, users } from '../db/schema';
 import { normalizeEmail, sha256Hex } from '../lib/address';
 import type { Env } from '../env';
-import { escapeHtml, page } from '../ui/page';
 
 export const owner = new Hono<{ Bindings: Env }>();
 
@@ -47,57 +46,54 @@ export async function currentOwner(c: Context<{ Bindings: Env }>): Promise<Owner
   return { userId: session.user.id, email: session.user.email, tenants: rows };
 }
 
-/** Pass Better Auth's response cookies through on a redirect. */
-function redirectWithCookies(from: Response, location: string): Response {
-  const headers = new Headers({ location });
-  for (const cookie of from.headers.getSetCookie()) headers.append('set-cookie', cookie);
-  return new Response(null, { status: 303, headers });
+/** Copy Better Auth's session cookies onto our response. */
+function withCookies(from: Response, to: Response): Response {
+  for (const cookie of from.headers.getSetCookie()) to.headers.append('set-cookie', cookie);
+  return to;
 }
 
-const loginForm = (next: string, error = '') =>
-  page(
-    'Sign in',
-    `<h1>Sign in</h1>${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}<form method="post">` +
-      `<input type="hidden" name="next" value="${escapeHtml(next)}"><label>Email<input name="email" type="email" autocomplete="email" required></label>` +
-      `<label>Password<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">Sign in</button></form>` +
-      `<p class="muted">Invited as an owner? <a href="/signup">Create your account</a>.</p>`,
-  );
+/** The React app serves the sign-in and sign-up pages; these routes only answer their posts. */
+const servePage = (c: Context<{ Bindings: Env }>) => c.env.ASSETS.fetch(new Request(new URL('/', c.req.url)));
+owner.get('/login', servePage);
+owner.get('/signup', servePage);
 
-owner.get('/login', (c) => c.html(loginForm(safeNext(c.req.query('next'), c.env.PUBLIC_BASE_URL))));
+/** Sign-in and sign-up accept JSON (the React pages) or a plain form post. */
+async function fields(c: Context<{ Bindings: Env }>): Promise<Record<string, string>> {
+  const raw = (c.req.header('content-type') ?? '').includes('application/json')
+    ? ((await c.req.json().catch(() => ({}))) as Record<string, unknown>)
+    : await c.req.parseBody();
+  return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, typeof v === 'string' ? v : '']));
+}
+
+/**
+ * Success sends JSON callers the target and form posts a 303 there, with the session cookies either
+ * way; failures are JSON with a message.
+ */
+function done(c: Context<{ Bindings: Env }>, auth: Response, redirect: string): Response {
+  const wantsJson = (c.req.header('content-type') ?? '').includes('application/json');
+  const res = wantsJson ? c.json({ ok: true, redirect }) : new Response(null, { status: 303, headers: { location: redirect } });
+  return withCookies(auth, res);
+}
 
 owner.post('/login', async (c) => {
-  const f = await c.req.parseBody();
-  const next = safeNext(String(f.next ?? ''), c.env.PUBLIC_BASE_URL);
-  const email = normalizeEmail(String(f.email ?? ''));
-  if (!(await allowed(c, `ip:${clientIp(c)}`, `login:${email}`))) return c.html(loginForm(next, 'Too many attempts. Wait a minute and try again.'), 429);
-  const res = await createAuth(c.env).api.signInEmail({
-    body: { email: String(f.email ?? ''), password: String(f.password ?? '') },
-    asResponse: true,
-  });
-  if (!res.ok) return c.html(loginForm(next, 'That email and password do not match.'), 401);
-  return redirectWithCookies(res, next);
+  const f = await fields(c);
+  const next = safeNext(f.next, c.env.PUBLIC_BASE_URL);
+  const email = normalizeEmail(f.email ?? '');
+  if (!(await allowed(c, `ip:${clientIp(c)}`, `login:${email}`))) return c.json({ error: 'Too many attempts. Wait a minute and try again.' }, 429);
+  const res = await createAuth(c.env).api.signInEmail({ body: { email: f.email ?? '', password: f.password ?? '' }, asResponse: true });
+  if (!res.ok) return c.json({ error: 'That email and password do not match.' }, 401);
+  return done(c, res, next);
 });
-
-const signupForm = (invite: string, error = '') =>
-  page(
-    'Create your account',
-    `<h1>Create your owner account</h1>${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}<form method="post">` +
-      `<input type="hidden" name="invite" value="${escapeHtml(invite)}">` +
-      `<label>Name<input name="name" required></label><label>Email (the one you were invited with)<input name="email" type="email" required></label>` +
-      `<label>Password (12+ characters)<input name="password" type="password" minlength="12" autocomplete="new-password" required></label><button type="submit">Create account</button></form>`,
-  );
-
-owner.get('/signup', (c) => c.html(signupForm(c.req.query('invite') ?? '')));
 
 /**
  * Create an owner account. Needs the single-use invite token issued for exactly this email; the
  * account becomes owner of that invite's tenant and the invite is consumed.
  */
 owner.post('/signup', async (c) => {
-  const f = await c.req.parseBody();
-  const invite = String(f.invite ?? '');
-  const email = normalizeEmail(String(f.email ?? ''));
-  if (!(await allowed(c, `ip:${clientIp(c)}`, `signup:${email}`))) return c.html(signupForm(invite, 'Too many attempts. Wait a minute and try again.'), 429);
+  const f = await fields(c);
+  const invite = f.invite ?? '';
+  const email = normalizeEmail(f.email ?? '');
+  if (!(await allowed(c, `ip:${clientIp(c)}`, `signup:${email}`))) return c.json({ error: 'Too many attempts. Wait a minute and try again.' }, 429);
   const d = db(c.env.DB);
   const row = invite
     ? await d
@@ -106,22 +102,19 @@ owner.post('/signup', async (c) => {
         .where(eq(ownerInvites.tokenHash, await sha256Hex(invite)))
         .get()
     : undefined;
-  if (!row || row.email !== email) return c.html(signupForm(invite, 'This invite link is not valid for that email.'), 403);
+  if (!row || row.email !== email) return c.json({ error: 'This invite link is not valid for that email.' }, 403);
 
-  const res = await createAuth(c.env).api.signUpEmail({
-    body: { name: String(f.name ?? ''), email, password: String(f.password ?? '') },
-    asResponse: true,
-  });
-  if (!res.ok) return c.html(signupForm(invite, 'Could not create the account. Check the password length and try again.'), 400);
+  const res = await createAuth(c.env).api.signUpEmail({ body: { name: f.name ?? '', email, password: f.password ?? '' }, asResponse: true });
+  if (!res.ok) return c.json({ error: 'Could not create the account. Check the password length and try again.' }, 400);
   const user = await d.select({ id: users.id }).from(users).where(eq(users.email, email)).get();
   await d.batch([
     d.insert(memberships).values({ tenantId: row.tenantId, userId: user!.id, role: 'owner' }).onConflictDoNothing(),
     d.delete(ownerInvites).where(and(eq(ownerInvites.tenantId, row.tenantId), eq(ownerInvites.email, row.email))),
   ]);
-  return redirectWithCookies(res, '/');
+  return done(c, res, '/');
 });
 
 owner.post('/logout', async (c) => {
   const res = await createAuth(c.env).api.signOut({ headers: c.req.raw.headers, asResponse: true });
-  return redirectWithCookies(res, '/login');
+  return withCookies(res, new Response(null, { status: 303, headers: { location: '/login' } }));
 });
