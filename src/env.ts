@@ -15,6 +15,8 @@ export interface Env {
   OAUTH_KV: KVNamespace;
   /** Cloudflare rate limiter for /login and /signup, per IP and per email. */
   AUTH_LIMITER: RateLimit;
+  /** "1" only in Cloudflare Worker Previews (set in wrangler's `previews` block). */
+  OPENMAIL_PREVIEW?: string;
   /** Injected by OAuthProvider into the default handler. */
   OAUTH_PROVIDER: OAuthHelpers;
 }

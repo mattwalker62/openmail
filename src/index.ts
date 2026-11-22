@@ -13,6 +13,7 @@ import { processPage } from './campaigns/consumer';
 import { reconcile, type PageMessage } from './campaigns/reconciler';
 import { deliveryDeps } from './campaigns/runtime';
 import { db } from './db/client';
+import { envForRequest } from './base-url';
 import { createAuth } from './auth/better-auth';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -40,24 +41,32 @@ export { SendRateLimiter } from './rate-limit/send-rate-limiter';
  * OAuth 2.1 for MCP clients (workers-oauth-provider, one Worker): /mcp needs a token and reaches the
  * MCP tools with the owner's grant; everything else is the app, which owns /authorize.
  */
-let oauth: OAuthProvider<Env> | undefined;
+// One provider per public origin: production has one; each Preview has its own address.
+const providers = new Map<string, OAuthProvider<Env>>();
 function oauthProvider(env: Env): OAuthProvider<Env> {
-  oauth ??= new OAuthProvider<Env>({
-    apiRoute: '/mcp',
-    apiHandler: mcpApiHandler as never,
-    defaultHandler: { fetch: (request: Request, e: Env, ctx: ExecutionContext) => app.fetch(request, e, ctx) } as never,
-    authorizeEndpoint: '/authorize',
-    tokenEndpoint: '/oauth/token',
-    clientRegistrationEndpoint: '/oauth/register',
-    scopesSupported: ['mcp'],
-    requiredScopes: ['mcp'],
-    resourceMetadata: { resource: `${env.PUBLIC_BASE_URL}/mcp`, authorization_servers: [env.PUBLIC_BASE_URL] },
-  });
-  return oauth;
+  let provider = providers.get(env.PUBLIC_BASE_URL);
+  if (!provider) {
+    provider = new OAuthProvider<Env>({
+      apiRoute: '/mcp',
+      apiHandler: mcpApiHandler as never,
+      defaultHandler: { fetch: (request: Request, e: Env, ctx: ExecutionContext) => app.fetch(request, e, ctx) } as never,
+      authorizeEndpoint: '/authorize',
+      tokenEndpoint: '/oauth/token',
+      clientRegistrationEndpoint: '/oauth/register',
+      scopesSupported: ['mcp'],
+      requiredScopes: ['mcp'],
+      resourceMetadata: { resource: `${env.PUBLIC_BASE_URL}/mcp`, authorization_servers: [env.PUBLIC_BASE_URL] },
+    });
+    providers.set(env.PUBLIC_BASE_URL, provider);
+  }
+  return provider;
 }
 
 export default {
-  fetch: (request, env, ctx) => oauthProvider(env).fetch(request, env, ctx),
+  fetch: (request, env, ctx) => {
+    const e = envForRequest(env, request);
+    return oauthProvider(e).fetch(request, e, ctx);
+  },
 
   /** Every minute: publish due campaign pages from the dispatch outbox (eng review D10). */
   async scheduled(_controller, env, ctx) {
