@@ -1,15 +1,19 @@
 import { Link, Outlet, useNavigate, useParams, useRouterState } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Bot, ChevronsUpDown, LayoutDashboard, LogOut, Mail, NotebookPen, Send, ShieldOff, Users, Workflow } from 'lucide-react';
+import { Bot, Check, ChevronsUpDown, CircleHelp, LayoutDashboard, LogOut, Mail, Monitor, Moon, NotebookPen, Send, ShieldOff, Sun, Users, Workflow } from 'lucide-react';
 import { api, type Me } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Separator } from '@/components/ui/separator';
+import { useTheme, type Theme } from '@/lib/theme';
 
 const NAV = [
   { to: '/t/$tenantId', label: 'Overview', icon: LayoutDashboard, exact: true },
@@ -44,20 +48,23 @@ export function AppShell() {
   const current = me?.tenants.find((t) => t.id === tenantId);
 
   return (
-    <div className="flex min-h-screen bg-muted/30">
+    <div className="flex min-h-screen bg-background">
       <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col border-r bg-sidebar p-3">
         <div className="flex items-center gap-2 px-2 pb-3 pt-1 text-base font-semibold tracking-tight">
           <Send className="size-4" /> openmail
         </div>
         <DropdownMenu>
-          <DropdownMenuTrigger className="flex w-full items-center justify-between rounded-lg border bg-background px-3 py-2 text-left text-sm shadow-xs hover:bg-accent">
-            <span className="truncate font-medium">{current?.name ?? 'Choose a business'}</span>
+          <DropdownMenuTrigger className="flex w-full items-center gap-2 rounded-lg border bg-background px-2 py-2 text-left text-sm shadow-xs hover:bg-accent">
+            <Initial name={current?.name ?? '?'} />
+            <span className="flex-1 truncate font-medium">{current?.name ?? 'Choose a business'}</span>
             <ChevronsUpDown className="size-4 text-muted-foreground" />
           </DropdownMenuTrigger>
           <DropdownMenuContent className="w-56">
             {me?.tenants.map((t) => (
               <DropdownMenuItem key={t.id} onClick={() => navigate({ to: '/t/$tenantId', params: { tenantId: t.id } })}>
-                {t.name}
+                <Initial name={t.name} />
+                <span className="flex-1">{t.name}</span>
+                {t.id === tenantId && <Check className="size-4" />}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -66,14 +73,8 @@ export function AppShell() {
         {tenantId && <NavGroup items={NAV} tenantId={tenantId} path={path} className="mt-5" />}
         {tenantId && <NavGroup title="Settings" items={SETTINGS} tenantId={tenantId} path={path} className="mt-5" />}
 
-        <div className="mt-auto">
-          <Separator className="my-3" />
-          <div className="truncate px-2 text-xs text-muted-foreground">{me?.email}</div>
-          <form method="post" action="/logout">
-            <button type="submit" className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-sidebar-accent">
-              <LogOut className="size-4" /> Sign out
-            </button>
-          </form>
+        <div className="mt-auto pt-3">
+          <AccountMenu email={me?.email ?? ''} businesses={me?.tenants.length ?? 0} tenantId={tenantId} />
         </div>
       </aside>
       <main className="min-w-0 flex-1 p-8">
@@ -82,6 +83,79 @@ export function AppShell() {
         </div>
       </main>
     </div>
+  );
+}
+
+/** A business's first letter in a small square, as in the switcher. */
+function Initial({ name }: { name: string }) {
+  return (
+    <span className="flex size-6 shrink-0 items-center justify-center rounded-md border bg-muted text-xs font-medium uppercase">{name.slice(0, 1)}</span>
+  );
+}
+
+const THEMES: Array<{ value: Theme; label: string; icon: typeof Sun }> = [
+  { value: 'light', label: 'Light', icon: Sun },
+  { value: 'dark', label: 'Dark', icon: Moon },
+  { value: 'system', label: 'System', icon: Monitor },
+];
+
+async function signOut() {
+  await fetch('/logout', { method: 'POST' });
+  window.location.assign('/login');
+}
+
+/** The signed-in owner at the foot of the sidebar; opens upward. */
+function AccountMenu({ email, businesses, tenantId }: { email: string; businesses: number; tenantId?: string }) {
+  const [theme, setTheme] = useTheme();
+  const navigate = useNavigate();
+  const name = email.split('@')[0] ?? '';
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-sidebar-accent">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-sm font-medium uppercase text-background">
+          {name.slice(0, 1)}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">{name}</span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {businesses} {businesses === 1 ? 'business' : 'businesses'}
+          </span>
+        </span>
+        <ChevronsUpDown className="size-4 text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" className="w-60">
+        <div className="px-2 py-1.5">
+          <div className="text-sm font-medium">{name}</div>
+          <div className="truncate text-xs text-muted-foreground">{email}</div>
+        </div>
+        <DropdownMenuSeparator />
+        {tenantId && (
+          <DropdownMenuItem onClick={() => navigate({ to: '/t/$tenantId/agent', params: { tenantId } })}>
+            <Bot /> Agent setup
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onClick={() => window.open('https://github.com/mattwalker62/openmail#readme', '_blank', 'noopener')}>
+          <CircleHelp /> Help
+        </DropdownMenuItem>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <Sun /> Theme
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {THEMES.map(({ value, label, icon: Icon }) => (
+              <DropdownMenuItem key={value} onClick={() => setTheme(value)}>
+                <Icon /> <span className="flex-1">{label}</span>
+                {theme === value && <Check />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={signOut}>
+          <LogOut /> Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
