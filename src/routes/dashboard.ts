@@ -331,21 +331,39 @@ dashboardApi.get('/t/:tenantId/home', async (c) => {
     ),
   ]);
 
-  // Contacts over time: running total at the end of each day in the range.
-  const created = await c.env.DB.prepare('select created_at as at from contacts where tenant_id = ?1 and created_at >= ?2 order by created_at')
-    .bind(tenantId, since)
-    .all<{ at: number }>();
-  const contactsOverTime: Array<{ date: string; total: number }> = [];
-  let running = totals?.atStart ?? 0;
-  let i = 0;
-  for (let day = days - 1; day >= 0; day--) {
-    const end = now - day * DAY;
-    while (i < created.results.length && created.results[i]!.at <= end) {
-      running += 1;
-      i += 1;
-    }
-    contactsOverTime.push({ date: new Date(end).toISOString().slice(0, 10), total: running });
-  }
+  // Charts: counts per day for this period and the one before it, bucketed by whole days ago
+  // (0 = the last 24 hours) so the response stays small however much was sent.
+  const [signupsByDay, sentByDay, beforeBoth] = await Promise.all([
+    c.env.DB.prepare(
+      `select cast((?2 - created_at) / ${DAY} as integer) as ago, count(*) as n from contacts
+       where tenant_id = ?1 and created_at > ?2 - ?3 * ${DAY} group by ago`,
+    )
+      .bind(tenantId, now, days * 2)
+      .all<{ ago: number; n: number }>(),
+    c.env.DB.prepare(
+      `select cast((?2 - r.claimed_at) / ${DAY} as integer) as ago, count(*) as n from campaign_recipients r
+       join campaigns c on c.id = r.campaign_id
+       where c.tenant_id = ?1 and r.status = 'sent' and r.claimed_at > ?2 - ?3 * ${DAY} group by ago`,
+    )
+      .bind(tenantId, now, days * 2)
+      .all<{ ago: number; n: number }>(),
+    q<{ n: number }>(`select count(*) as n from contacts where tenant_id = ?1 and created_at <= ?2 - ?3 * ${DAY}`, tenantId, now, days * 2),
+  ]);
+  const perDay = (rows: Array<{ ago: number; n: number }>) => {
+    const m = new Map(rows.map((r) => [r.ago, r.n]));
+    return (ago: number) => m.get(ago) ?? 0;
+  };
+  const signups = perDay(signupsByDay.results);
+  const sends = perDay(sentByDay.results);
+  const dateOf = (ago: number) => new Date(now - ago * DAY).toISOString().slice(0, 10);
+  /** Days `offset + days - 1` … `offset` ago, oldest first. */
+  const span = (offset: number) => Array.from({ length: days }, (_, i) => offset + days - 1 - i);
+
+  let running = beforeBoth?.n ?? 0;
+  const previousContactsOverTime = span(days).map((ago) => ({ date: dateOf(ago), total: (running += signups(ago)) }));
+  const contactsOverTime = span(0).map((ago) => ({ date: dateOf(ago), total: (running += signups(ago)) }));
+  const sentPerDay = span(0).map((ago) => ({ date: dateOf(ago), sent: sends(ago) }));
+  const sum = (f: (ago: number) => number, offset: number) => span(offset).reduce((n, ago) => n + f(ago), 0);
 
   const sent = sentRows?.n ?? 0;
   const contacts = totals?.total ?? 0;
@@ -394,8 +412,13 @@ dashboardApi.get('/t/:tenantId/home', async (c) => {
       bouncesAndComplaints: (supp?.bounces ?? 0) + (supp?.complaints ?? 0),
     },
     totals: { contacts, contactsAtStart: totals?.atStart ?? 0 },
+    previous: { newSubscribers: sum(signups, days), emailsSent: sum(sends, days) },
+    previousContactsOverTime,
+    sentPerDay,
     scorecard: {
       sent,
+      bounces: supp?.bounces ?? 0,
+      complaints: supp?.complaints ?? 0,
       bounceRate: rate(supp?.bounces ?? 0, sent),
       complaintRate: rate(supp?.complaints ?? 0, sent),
       unsubscribeRate: rate(supp?.unsubscribes ?? 0, sent),

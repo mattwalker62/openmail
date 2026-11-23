@@ -35,7 +35,7 @@ describe('GET /api/t/:id/home', () => {
     const h = await home(cookie, t.id);
     expect(h.period).toEqual({ newSubscribers: 3, emailsSent: 4, awaitingApproval: 1, scheduled: 1, bouncesAndComplaints: 1 });
     expect(h.totals).toEqual({ contacts: 4, contactsAtStart: 1 });
-    expect(h.scorecard).toEqual({ sent: 4, bounceRate: 0.25, complaintRate: 0, unsubscribeRate: 0.25 });
+    expect(h.scorecard).toMatchObject({ sent: 4, bounceRate: 0.25, complaintRate: 0, unsubscribeRate: 0.25 });
     expect(h.recent.lastSend).toMatchObject({ subject: 'Sent one', delivered: 4 });
     expect(h.recent.lastSignup).toMatchObject({ email: expect.stringMatching(/@x\.com$/) });
     expect(h.contactsOverTime).toHaveLength(7);
@@ -46,7 +46,7 @@ describe('GET /api/t/:id/home', () => {
     const t = await createTenant();
     const { cookie } = await signInOwner(t.slug);
     const h = await home(cookie, t.id);
-    expect(h.scorecard).toEqual({ sent: 0, bounceRate: null, complaintRate: null, unsubscribeRate: null });
+    expect(h.scorecard).toMatchObject({ sent: 0, bounceRate: null, complaintRate: null, unsubscribeRate: null });
     expect(h.recent).toEqual({ lastSend: null, lastSignup: null });
   });
 
@@ -61,6 +61,33 @@ describe('GET /api/t/:id/home', () => {
 
     const kinds = (await home(cookie, t.id)).recommendations.map((r: { kind: string }) => r.kind);
     expect(kinds).toEqual(['approve', 'finish_draft', 'write_to_readers', 'add_context']);
+  });
+
+  it('gives sends per day and the previous period for the charts', async () => {
+    const t = await createTenant();
+    const { cookie } = await signInOwner(t.slug);
+    for (const e of ['a', 'b', 'c']) {
+      await api(t.apiKey, '/v1/contacts', { method: 'POST', body: JSON.stringify({ email: `${e}@x.com`, lists: ['beacon'] }) });
+    }
+    // b signed up in the previous 7-day period, c before both.
+    await env.DB.prepare("update contacts set created_at = ? where tenant_id = ? and email = 'b@x.com'").bind(Date.now() - 10 * DAY, t.id).run();
+    await env.DB.prepare("update contacts set created_at = ? where tenant_id = ? and email = 'c@x.com'").bind(Date.now() - 40 * DAY, t.id).run();
+    const d = db(env.DB);
+    const keyId = (await env.DB.prepare('select id from api_keys where tenant_id = ?').bind(t.id).first<{ id: string }>())!.id;
+    const draft = await createDraft(d, t.id, { subject: 'S', html: 'h' }, 'api');
+    const sent = await requestCampaign(d, { tenantId: t.id, keyId, origin: 'api' }, { draftId: draft.id, list: 'beacon' });
+    await approveCampaign(d, sent.campaignId, 'owner');
+    await env.DB.prepare("update campaign_recipients set status = 'sent', claimed_at = ? where campaign_id = ?").bind(Date.now() - 2 * DAY, sent.campaignId).run();
+    await api(t.apiKey, '/v1/suppressions', { method: 'POST', body: JSON.stringify({ email: 'a@x.com', kind: 'complaint' }) });
+
+    const h = await home(cookie, t.id);
+    expect(h.sentPerDay).toHaveLength(7);
+    expect(h.sentPerDay.reduce((n: number, p: { sent: number }) => n + p.sent, 0)).toBe(3);
+    expect(h.sentPerDay.find((p: { sent: number }) => p.sent > 0).date).toBe(new Date(Date.now() - 2 * DAY).toISOString().slice(0, 10));
+    expect(h.previous).toEqual({ newSubscribers: 1, emailsSent: 0 });
+    expect(h.previousContactsOverTime).toHaveLength(7);
+    expect(h.previousContactsOverTime.at(-1).total).toBe(2);
+    expect(h.scorecard).toMatchObject({ sent: 3, bounces: 0, complaints: 1 });
   });
 
   it("refuses another business's dashboard and clamps the range to 7, 30 or 90 days", async () => {
